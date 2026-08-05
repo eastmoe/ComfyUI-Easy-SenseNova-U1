@@ -1,8 +1,8 @@
 import copy
 
-from transformers import Qwen3Config, Qwen3MoeConfig
-from transformers.utils import logging
-from transformers.configuration_utils import PretrainedConfig
+from transformers_4571 import Qwen3Config, Qwen3MoeConfig
+from transformers_4571.utils import logging
+from transformers_4571.configuration_utils import PretrainedConfig
 
 from .configuration_neo_vit import NEOVisionConfig
 

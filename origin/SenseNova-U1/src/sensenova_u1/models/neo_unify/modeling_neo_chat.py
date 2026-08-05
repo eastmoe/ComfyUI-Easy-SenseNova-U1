@@ -3,12 +3,12 @@ import math
 import os
 import torch.utils.checkpoint
 from torch import nn
-import transformers
+import transformers_4571 as transformers
 from torch.nn import CrossEntropyLoss
-from transformers import GenerationConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import logging
+from transformers_4571 import GenerationConfig
+from transformers_4571.modeling_outputs import CausalLMOutputWithPast
+from transformers_4571.modeling_utils import PreTrainedModel
+from transformers_4571.utils import logging
 
 from .configuration_neo_chat import NEOChatConfig, NEOMoELLMConfig
 from .conversation import get_conv_template

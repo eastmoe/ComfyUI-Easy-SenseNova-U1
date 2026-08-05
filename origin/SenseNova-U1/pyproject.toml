@@ -30,7 +30,7 @@ classifiers = [
 
 dependencies = [
     "torch>=2.5,<2.9",
-    "transformers>=4.57.1,<4.58",
+    # ComfyUI 插件从私有 transformer_patch 提供 Transformers 4.57.1。
     "numpy>=1.24,<3",
     "pillow>=10,<13",
 ]

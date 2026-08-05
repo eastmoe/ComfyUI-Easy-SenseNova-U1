@@ -3,7 +3,7 @@
 --extra-index-url https://download.pytorch.org/whl/cu128
 
 torch>=2.5,<2.9
-transformers>=4.57.1,<4.58
+# Transformers 4.57.1 由外层 ComfyUI 插件的私有 transformer_patch 提供。
 numpy>=1.24,<3
 pillow>=10,<13
 

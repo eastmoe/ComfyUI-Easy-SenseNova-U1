@@ -142,7 +142,7 @@ def load_model_and_tokenizer(
     itself. ``device_map`` is forced to ``None`` in this mode (with a warning)
     because accelerate's static placement is incompatible with dynamic offload.
     """
-    from transformers import AutoConfig, AutoModel, AutoTokenizer
+    from transformers_4571 import AutoConfig, AutoModel, AutoTokenizer
 
     from .. import check_checkpoint_compatibility
 
@@ -165,7 +165,7 @@ def load_model_and_tokenizer(
         gguf_device = torch.device("cpu") if for_offload else device
         model = _load_from_gguf(config, gguf_checkpoint, dtype=dtype, device=gguf_device)
     else:
-        model_kwargs: dict[str, Any] = {"config": config, "torch_dtype": dtype}
+        model_kwargs: dict[str, Any] = {"config": config, "dtype": dtype}
         if device_map:
             model_kwargs["device_map"] = device_map
             parsed_max_memory = _normalize_max_memory(max_memory)
@@ -229,7 +229,7 @@ def _load_from_gguf(
     except ImportError as exc:
         raise RuntimeError("GGUF loading requires `accelerate`; install it in your environment.") from exc
 
-    from transformers import AutoModel
+    from transformers_4571 import AutoModel
 
     from .gguf_loader import load_gguf_checkpoint, set_gguf2meta_model
 

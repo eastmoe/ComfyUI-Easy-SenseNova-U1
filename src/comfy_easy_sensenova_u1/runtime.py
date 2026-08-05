@@ -12,10 +12,10 @@ import numpy as np
 import torch
 from PIL import Image
 
-from .compat import (
-    compatibility_report,
+from .backend import (
     import_sensenova_backend,
-    load_model_and_tokenizer_compat,
+    load_model_and_tokenizer,
+    runtime_report,
 )
 
 
@@ -235,7 +235,7 @@ def load_handle(
             _MODEL_CACHE.clear()
             _clear_memory()
             sensenova_u1.set_attn_backend(attention_backend)
-            model, tokenizer = load_model_and_tokenizer_compat(
+            model, tokenizer = load_model_and_tokenizer(
                 model_path,
                 dtype=dtype_from_name(storage_precision),
                 device=resolved_device,
@@ -257,7 +257,7 @@ def load_handle(
                 vram_mode=vram_mode,
                 prefetch_count=prefetch_count,
                 device_map=device_map,
-                compatibility=compatibility_report(),
+                compatibility=runtime_report(),
             )
         return _MODEL_CACHE[key]
 

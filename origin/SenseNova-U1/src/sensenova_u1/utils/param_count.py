@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import torch
-from transformers import AutoConfig, AutoModel
+from transformers_4571 import AutoConfig, AutoModel
 
 from sensenova_u1 import check_checkpoint_compatibility
 

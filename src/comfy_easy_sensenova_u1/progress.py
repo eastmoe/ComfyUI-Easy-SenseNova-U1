@@ -119,7 +119,11 @@ class TokenInferenceProgress(_ModelProgress):
     """通过 Transformers StoppingCriteria 跟踪逐 token 推理。"""
 
     def stopping_criteria(self):
-        from transformers import StoppingCriteria, StoppingCriteriaList
+        from .transformer_patch import load_transformers
+
+        private_transformers = load_transformers()
+        StoppingCriteria = private_transformers.StoppingCriteria
+        StoppingCriteriaList = private_transformers.StoppingCriteriaList
 
         progress = self
 

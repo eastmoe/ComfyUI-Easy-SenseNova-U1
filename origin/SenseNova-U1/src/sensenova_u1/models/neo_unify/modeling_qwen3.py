@@ -6,26 +6,26 @@ from torch import nn
 
 import copy
 import math
-from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache, DynamicCache
-from transformers.generation import GenerationMixin
-from transformers.integrations import use_kernel_forward_from_hub
-from transformers.masking_utils import create_causal_mask
-from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
-from transformers.modeling_layers import (
+from transformers_4571.activations import ACT2FN
+from transformers_4571.cache_utils import Cache, DynamicCache
+from transformers_4571.generation import GenerationMixin
+from transformers_4571.integrations import use_kernel_forward_from_hub
+from transformers_4571.masking_utils import create_causal_mask
+from transformers_4571.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers_4571.modeling_layers import (
     GenericForQuestionAnswering,
     GenericForSequenceClassification,
     GenericForTokenClassification,
     GradientCheckpointingLayer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from transformers.processing_utils import Unpack
-from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
-from transformers.utils.deprecation import deprecate_kwarg
-from transformers.utils.generic import check_model_inputs
-from transformers import Qwen3Config
+from transformers_4571.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers_4571.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
+from transformers_4571.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+from transformers_4571.processing_utils import Unpack
+from transformers_4571.utils import TransformersKwargs, auto_docstring, can_return_tuple
+from transformers_4571.utils.deprecation import deprecate_kwarg
+from transformers_4571.utils.generic import check_model_inputs
+from transformers_4571 import Qwen3Config
 
 try:
     from flash_attn import flash_attn_func  # type: ignore
@@ -91,9 +91,9 @@ def _sdpa_attn_func(q, k, v, dropout_p: float = 0.0, softmax_scale=None, causal:
     expects ``[B, H, S, D]``; we transpose in and out.
 
     ``flash_attn_func`` natively handles Grouped-Query Attention (GQA) where
-    ``H_q > H_kv``. Plain ``scaled_dot_product_attention`` only supports that
-    via the ``enable_gqa=True`` kwarg (torch >= 2.5). For broader compatibility
-    we just materialize the repeat manually when needed.
+    ``H_q > H_kv``. PyTorch 2.6+ can pass that layout directly with
+    ``enable_gqa=True``. Keeping K/V compact avoids materializing four copies
+    for this model and lets CUDA select its fused GQA kernel.
     """
     q_bhsd = q.transpose(1, 2)
     k_bhsd = k.transpose(1, 2)
@@ -101,17 +101,16 @@ def _sdpa_attn_func(q, k, v, dropout_p: float = 0.0, softmax_scale=None, causal:
 
     h_q = q_bhsd.shape[1]
     h_kv = k_bhsd.shape[1]
-    if h_q != h_kv:
+    enable_gqa = h_q != h_kv
+    if enable_gqa:
         if h_q % h_kv != 0:
             raise ValueError(
                 f"Cannot broadcast key/value heads ({h_kv}) to query heads ({h_q}): not divisible."
             )
-        n_rep = h_q // h_kv
-        k_bhsd = k_bhsd.repeat_interleave(n_rep, dim=1)
-        v_bhsd = v_bhsd.repeat_interleave(n_rep, dim=1)
 
-    # SDPA does not support an explicit `scale` argument on older torch
-    # versions; fall back to the manual path in that case.
+    # The plugin requires PyTorch 2.6+, where both kwargs are available. The
+    # fallback keeps the backend importable on older builds used for source
+    # inspection without slowing down supported environments.
     try:
         out = torch.nn.functional.scaled_dot_product_attention(
             q_bhsd,
@@ -120,10 +119,15 @@ def _sdpa_attn_func(q, k, v, dropout_p: float = 0.0, softmax_scale=None, causal:
             dropout_p=dropout_p,
             is_causal=causal,
             scale=softmax_scale,
+            enable_gqa=enable_gqa,
         )
     except TypeError:
+        if enable_gqa:
+            n_rep = h_q // h_kv
+            k_bhsd = k_bhsd.repeat_interleave(n_rep, dim=1)
+            v_bhsd = v_bhsd.repeat_interleave(n_rep, dim=1)
         if softmax_scale is not None:
-            q_bhsd = q_bhsd * softmax_scale
+            q_bhsd = q_bhsd * (softmax_scale * math.sqrt(q_bhsd.shape[-1]))
             out = torch.nn.functional.scaled_dot_product_attention(
                 q_bhsd,
                 k_bhsd,
@@ -1095,7 +1099,13 @@ class Qwen3Model(Qwen3PreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
-        
+        r"""
+        image_gen_indicators (`torch.Tensor`, *optional*):
+            Marks positions that belong to image-generation tokens.
+        indexes (`torch.LongTensor`, *optional*):
+            Packed temporal and spatial rotary-position indexes.
+        """
+
         # assert position_ids is not None
         # assert cache_position is not None
         # assert past_key_values is not None 
@@ -1219,6 +1229,8 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
         r"""
+        indexes (`torch.LongTensor`, *optional*):
+            Packed temporal and spatial rotary-position indexes.
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
             config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
@@ -1227,7 +1239,7 @@ class Qwen3ForCausalLM(Qwen3PreTrainedModel, GenerationMixin):
         Example:
 
         ```python
-        >>> from transformers import AutoTokenizer, Qwen3ForCausalLM
+        >>> from transformers_4571 import AutoTokenizer, Qwen3ForCausalLM
 
         >>> model = Qwen3ForCausalLM.from_pretrained("Qwen/Qwen3-8B")
         >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")

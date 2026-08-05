@@ -29,15 +29,15 @@ pip install -r requirements.txt
 
 重启 ComfyUI。若使用 `flash` 注意力机制，还需单独安装与当前 Python、PyTorch、CUDA 匹配的 `flash-attn` wheel；否则使用 `auto` 或 `sdpa`。
 
-依赖文件只会额外安装 ComfyUI 官方依赖未包含的 `accelerate`。`transformers`、`numpy`、`Pillow`、`tqdm` 以及它们提供的传递依赖均复用 ComfyUI 环境，原项目版本约束以注释形式保留在依赖文件中。
+依赖文件只会额外安装 ComfyUI 官方依赖未包含的 `accelerate`。`numpy`、`Pillow`、`tqdm` 以及它们提供的传递依赖均复用 ComfyUI 环境。Transformers `4.57.1` 源码快照随插件放在 `transformer_patch/transformers_4571`，不会安装或替换 ComfyUI 的全局 Transformers。
 
 ## 兼容性
 
-- Transformers：支持 `4.57.1` 和 `5.x`。兼容层会在 5.x 下恢复 Qwen3 配置中移除的 `rope_theta` 属性，补齐新版权重初始化要求的 RoPE 方法和顶层组合模型 `post_init()` 契约，转换因果掩码接口，并按主版本选择 `torch_dtype`（4.x）或 `dtype`（5.x）加载参数。插件还会隐藏 Transformers 5 对外部模型自动文档进行校验时产生的非运行时“ERROR”噪声。
+- Transformers：模型配置、注册、tokenizer、权重加载、生成停止条件及 SenseNova 后端全部固定走插件私有 `4.57.1`。全局 Transformers 可以是 ComfyUI 所需的任意版本，插件不检查、不导入也不修改它；原先针对 4.57/5.x 分支的兼容层已移除。
 - PyTorch：已检查 `2.6`～`2.13` 使用到的张量、SDPA、自动混合精度和权重加载接口，并实测 `2.6`、`2.12`、`2.13`。`2.6` 起 `torch.load` 默认使用 `weights_only=True`，原项目涉及的普通张量 state dict 可直接兼容；插件要求 `PyTorch>=2.6`。更高版本会显示“超出已检查范围”警告，但不会被强制阻止。
 - NumPy：支持 `1.24+` 的 1.x 与 2.x。节点只使用两代均保留的数组、类型和张量桥接接口，不依赖 NumPy 2.0 移除的旧类型别名。
 
-实际运行版本及兼容状态会出现在“模型加载”节点的“模型信息”输出中。`transformers<4.57.1`、`transformers>=6`、`PyTorch<2.6` 或 `NumPy<1.24/NumPy>=3` 会在加载前给出明确错误。
+实际运行版本及来源会出现在“模型加载”节点的“模型信息”输出中。`PyTorch<2.6` 或 `NumPy<1.24/NumPy>=3` 会在加载前给出明确错误。
 
 ## 推荐工作流
 
@@ -59,6 +59,7 @@ pip install -r requirements.txt
 - 官方模型体积较大，下载和首次加载需要较长时间。
 - SenseNova-U1 推荐约 2K 输出，显存不仅由权重决定，生成分辨率、KV Cache、批量数量和交错图像数也会显著影响峰值显存。
 - `vram_mode != full` 与多卡 `device_map != none` 互斥。
+- `sdpa` 在 PyTorch 2.6+ 直接使用融合 GQA，不再为 32 个查询头复制 8 组 K/V；NVIDIA 环境仍可使用 `flash` 获得外部 FlashAttention 内核的最佳速度。
 - 关闭 TLS 证书校验会降低连接安全性，仅建议在可信网络中临时排障。
 - 下载线程控制同时下载的文件数量；Xet 连接数控制每个大文件的并发范围请求。过高的组合会增加内存与磁盘压力，建议先使用默认值 `8` 和 `16`。
 - 未启用“强制重新下载”时，Hugging Face Hub 会复用完整文件并从未完成文件继续下载。下载结束后的“大小”校验速度较快；“大小和 SHA256”会重新读取大型权重文件，耗时取决于磁盘速度。

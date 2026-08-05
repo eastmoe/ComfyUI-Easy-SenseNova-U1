@@ -44,7 +44,7 @@ def register() -> None:
     if _REGISTERED:
         return
 
-    from transformers import AutoConfig, AutoModel
+    from transformers_4571 import AutoConfig, AutoModel
 
     AutoConfig.register("neo_vision", NEOVisionConfig, exist_ok=True)
     AutoConfig.register("neo_chat", NEOChatConfig, exist_ok=True)

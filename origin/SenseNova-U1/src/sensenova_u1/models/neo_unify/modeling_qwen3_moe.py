@@ -4,17 +4,17 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from transformers.cache_utils import Cache, DynamicCache
-from transformers.generation import GenerationMixin
-from transformers.masking_utils import create_causal_mask
-from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
-from transformers.modeling_layers import GradientCheckpointingLayer
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from transformers.modeling_utils import PreTrainedModel
-from transformers.processing_utils import Unpack
-from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
-from transformers.utils.deprecation import deprecate_kwarg
-from transformers.utils.generic import check_model_inputs
+from transformers_4571.cache_utils import Cache, DynamicCache
+from transformers_4571.generation import GenerationMixin
+from transformers_4571.masking_utils import create_causal_mask
+from transformers_4571.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers_4571.modeling_layers import GradientCheckpointingLayer
+from transformers_4571.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers_4571.modeling_utils import PreTrainedModel
+from transformers_4571.processing_utils import Unpack
+from transformers_4571.utils import TransformersKwargs, auto_docstring, can_return_tuple
+from transformers_4571.utils.deprecation import deprecate_kwarg
+from transformers_4571.utils.generic import check_model_inputs
 
 from .configuration_neo_chat import NEOMoELLMConfig
 from .modeling_qwen3 import (
@@ -32,7 +32,7 @@ class Qwen3MoeMLP(nn.Module):
 
     def __init__(self, config, intermediate_size: Optional[int] = None):
         super().__init__()
-        from transformers.activations import ACT2FN
+        from transformers_4571.activations import ACT2FN
 
         self.config = config
         self.hidden_size = config.hidden_size
@@ -398,6 +398,13 @@ class Qwen3MoeModel(Qwen3MoePreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
+        r"""
+        image_gen_indicators (`torch.Tensor`, *optional*):
+            Marks positions that belong to image-generation tokens.
+        indexes (`torch.LongTensor`, *optional*):
+            Packed temporal and spatial rotary-position indexes.
+        """
+
         if image_gen_indicators is None:
             exist_non_image_gen_tokens = True
             exist_image_gen_tokens = False
@@ -508,6 +515,11 @@ class Qwen3MoeForCausalLM(Qwen3MoePreTrainedModel, GenerationMixin):
         logits_to_keep: Union[int, torch.Tensor] = 0,
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
+        r"""
+        indexes (`torch.LongTensor`, *optional*):
+            Packed temporal and spatial rotary-position indexes.
+        """
+
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
             indexes=indexes,
