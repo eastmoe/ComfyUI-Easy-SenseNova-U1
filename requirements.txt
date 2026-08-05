@@ -1,0 +1,14 @@
+# 以下依赖已由 ComfyUI 官方 requirements.txt 直接提供：
+# transformers>=4.57.1,<4.58
+# numpy>=1.24,<3
+# pillow>=10,<13
+
+# 以下依赖由 ComfyUI 的 transformers 等官方依赖间接提供：
+# huggingface-hub>=0.34,<2
+# packaging>=23
+
+# ComfyUI 官方依赖未包含；SenseNova-U1 的 device_map 多卡加载需要。
+accelerate>=1,<2
+
+# flash-attn 是可选依赖；选择 flash 注意力机制时需安装与当前
+# Python、PyTorch 和 CUDA 版本匹配的 wheel。

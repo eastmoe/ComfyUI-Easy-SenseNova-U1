@@ -1,0 +1,149 @@
+{
+  "category": "eastmoe/Comfy-Easy-SenseNova-U1",
+  "input_labels": {
+    "model": {"display_name": "SenseNova 模型", "tooltip": "连接 SenseNova-U1 模型加载节点。"},
+    "image": {"display_name": "图像", "tooltip": "ComfyUI IMAGE 输入；批次可表示多张参考图。"},
+    "prompt": {"display_name": "提示词", "tooltip": "输入生成描述或编辑指令。"},
+    "seed": {"display_name": "随机种子", "tooltip": "固定随机种子以复现结果。"},
+    "think_mode": {"display_name": "思考模式", "tooltip": "启用模型原生推理过程。"},
+    "cfg_scale": {"display_name": "文本 CFG", "tooltip": "文本条件引导强度。"},
+    "img_cfg_scale": {"display_name": "图像 CFG", "tooltip": "图像条件引导强度。"},
+    "cfg_norm": {"display_name": "CFG 归一化", "tooltip": "选择 CFG 重缩放方式。"},
+    "timestep_shift": {"display_name": "时间步偏移", "tooltip": "扩散时间步偏移，推荐值为 3.0。"},
+    "cfg_interval_start": {"display_name": "CFG 起点", "tooltip": "CFG 生效区间起点。"},
+    "cfg_interval_end": {"display_name": "CFG 终点", "tooltip": "CFG 生效区间终点。"},
+    "num_steps": {"display_name": "采样步数", "tooltip": "扩散采样步数。"},
+    "resolution": {"display_name": "分辨率", "tooltip": "选择原模型推荐分辨率档位。"}
+  },
+  "nodes": {
+    "ComfyEasySenseNovaDownloadModel": {
+      "display_name": "SenseNova-U1 模型下载",
+      "inputs": {
+        "model_preset": {"display_name": "模型预设", "tooltip": "选择官方模型或自定义 Hugging Face 仓库。"},
+        "repo_id": {"display_name": "仓库 ID", "tooltip": "自定义仓库应使用“组织/仓库”格式。"},
+        "model_subfolder": {"display_name": "模型子文件夹", "tooltip": "保存到 models/SenseNova 下的独立子目录。"},
+        "download_source": {"display_name": "下载源", "tooltip": "选择 Hugging Face 或 hf-mirror。"},
+        "revision": {"display_name": "版本", "tooltip": "可选 branch、tag 或 commit。"},
+        "token": {"display_name": "访问令牌", "tooltip": "仅私有或受限仓库需要。"},
+        "disable_tls": {"display_name": "关闭 TLS 校验", "tooltip": "仅在可信网络排障时开启。"},
+        "disable_xet": {"display_name": "关闭 Xet", "tooltip": "使用普通 HTTP 下载，提高镜像兼容性。"},
+        "force_download": {"display_name": "强制重新下载", "tooltip": "忽略已有模型并重新下载。"}
+      },
+      "outputs": {
+        "模型路径": {"display_name": "模型路径"},
+        "下载状态": {"display_name": "下载状态"}
+      }
+    },
+    "ComfyEasySenseNovaLoadModel": {
+      "display_name": "SenseNova-U1 模型加载",
+      "inputs": {
+        "model_name": {"display_name": "本地模型", "tooltip": "models/SenseNova 下检测到的模型子目录。"},
+        "model_path": {"display_name": "模型路径", "tooltip": "连接下载节点输出时优先使用该路径。"},
+        "device": {"display_name": "设备", "tooltip": "auto 使用 ComfyUI 当前计算设备。"},
+        "storage_precision": {"display_name": "存储精度", "tooltip": "权重加载和驻留的数据类型。"},
+        "compute_precision": {"display_name": "计算精度", "tooltip": "推理自动混合精度；auto 跟随存储精度。float32 计算要求 float32 存储。"},
+        "attention_backend": {"display_name": "注意力机制", "tooltip": "自动、FlashAttention 或 PyTorch SDPA。"},
+        "vram_mode": {"display_name": "显存模式", "tooltip": "选择整模常驻或逐层卸载。"},
+        "device_map": {"display_name": "多卡映射", "tooltip": "使用 Accelerate 将权重分片到多个设备。"},
+        "max_memory": {"display_name": "设备内存上限", "tooltip": "例如 0=20GiB,1=20GiB,cpu=64GiB。"},
+        "reload_model": {"display_name": "重新加载模型", "tooltip": "忽略模型缓存并重新实例化。"}
+      },
+      "outputs": {
+        "SenseNova 模型": {"display_name": "SenseNova 模型"},
+        "模型信息": {"display_name": "模型信息"}
+      }
+    },
+    "ComfyEasySenseNovaTextToImage": {
+      "display_name": "SenseNova-U1 文生图",
+      "inputs": {
+        "model": {"display_name": "SenseNova 模型"},
+        "prompt": {"display_name": "提示词"},
+        "resolution": {"display_name": "分辨率"},
+        "cfg_scale": {"display_name": "文本 CFG"},
+        "cfg_norm": {"display_name": "CFG 归一化"},
+        "timestep_shift": {"display_name": "时间步偏移"},
+        "cfg_interval_start": {"display_name": "CFG 起点"},
+        "cfg_interval_end": {"display_name": "CFG 终点"},
+        "num_steps": {"display_name": "采样步数"},
+        "seed": {"display_name": "随机种子"},
+        "think_mode": {"display_name": "思考模式"},
+        "batch_size": {"display_name": "批量数量", "tooltip": "一次生成的图像数量。"}
+      },
+      "outputs": {
+        "图像": {"display_name": "图像"},
+        "思考文本": {"display_name": "思考文本"},
+        "元数据": {"display_name": "元数据"}
+      }
+    },
+    "ComfyEasySenseNovaImageEdit": {
+      "display_name": "SenseNova-U1 图像编辑",
+      "inputs": {
+        "model": {"display_name": "SenseNova 模型"},
+        "image": {"display_name": "输入图像"},
+        "prompt": {"display_name": "编辑指令"},
+        "auto_size": {"display_name": "自动分辨率", "tooltip": "按照首张图的宽高比计算输出尺寸。"},
+        "width": {"display_name": "输出宽度"},
+        "height": {"display_name": "输出高度"},
+        "target_megapixels": {"display_name": "目标百万像素"},
+        "cfg_scale": {"display_name": "文本 CFG"},
+        "img_cfg_scale": {"display_name": "图像 CFG"},
+        "cfg_norm": {"display_name": "CFG 归一化"},
+        "timestep_shift": {"display_name": "时间步偏移"},
+        "cfg_interval_start": {"display_name": "CFG 起点"},
+        "cfg_interval_end": {"display_name": "CFG 终点"},
+        "num_steps": {"display_name": "采样步数"},
+        "seed": {"display_name": "随机种子"},
+        "think_mode": {"display_name": "思考模式"},
+        "batch_size": {"display_name": "输出批量数量"}
+      },
+      "outputs": {
+        "编辑图像": {"display_name": "编辑图像"},
+        "思考文本": {"display_name": "思考文本"},
+        "元数据": {"display_name": "元数据"}
+      }
+    },
+    "ComfyEasySenseNovaVisionQA": {
+      "display_name": "SenseNova-U1 视觉问答",
+      "inputs": {
+        "model": {"display_name": "SenseNova 模型"},
+        "image": {"display_name": "输入图像"},
+        "question": {"display_name": "问题", "tooltip": "对图像提出问题或要求模型进行描述。"},
+        "max_new_tokens": {"display_name": "最大新 Token"},
+        "do_sample": {"display_name": "启用采样"},
+        "temperature": {"display_name": "温度"},
+        "top_p": {"display_name": "Top P"},
+        "top_k": {"display_name": "Top K"},
+        "repetition_penalty": {"display_name": "重复惩罚"}
+      },
+      "outputs": {
+        "回答": {"display_name": "回答"},
+        "回答列表 JSON": {"display_name": "回答列表 JSON"},
+        "元数据": {"display_name": "元数据"}
+      }
+    },
+    "ComfyEasySenseNovaInterleave": {
+      "display_name": "SenseNova-U1 图文交错生成",
+      "inputs": {
+        "model": {"display_name": "SenseNova 模型"},
+        "prompt": {"display_name": "提示词"},
+        "resolution": {"display_name": "图像分辨率"},
+        "system_message": {"display_name": "系统提示词"},
+        "cfg_scale": {"display_name": "文本 CFG"},
+        "img_cfg_scale": {"display_name": "图像 CFG"},
+        "timestep_shift": {"display_name": "时间步偏移"},
+        "cfg_interval_start": {"display_name": "CFG 起点"},
+        "cfg_interval_end": {"display_name": "CFG 终点"},
+        "num_steps": {"display_name": "每张图采样步数"},
+        "max_images": {"display_name": "最大图像数"},
+        "seed": {"display_name": "随机种子"},
+        "think_mode": {"display_name": "思考模式"},
+        "image": {"display_name": "参考图像"}
+      },
+      "outputs": {
+        "生成图像": {"display_name": "生成图像"},
+        "交错文本": {"display_name": "交错文本"},
+        "元数据": {"display_name": "元数据"}
+      }
+    }
+  }
+}
