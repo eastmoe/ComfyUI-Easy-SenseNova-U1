@@ -1,0 +1,21 @@
+# Core inference dependencies. Optional features are installed through the
+# extras documented below so a default install stays small.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch>=2.5,<2.9
+transformers>=4.57.1,<4.58
+numpy>=1.24,<3
+pillow>=10,<13
+
+# Install the local src-layout package so `python inference.py` works directly.
+-e .
+
+# Optional feature sets:
+#   pip install -e ".[multi-gpu]"
+#   pip install -e ".[lora]"
+#   pip install -e ".[prompt-enhance]"
+#   pip install -e ".[gguf]"
+#   pip install -e ".[dev]"
+#
+# FlashAttention wheels must match the installed Python, Torch, and CUDA
+# versions. Install a matching wheel manually, or use SDPA without [flash].

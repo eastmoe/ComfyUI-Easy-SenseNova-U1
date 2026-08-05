@@ -1,0 +1,110 @@
+[project]
+name = "sensenova-u1"
+version = "0.1.0"
+description = "SenseNova-U1: Unifying Multimodal Understanding and Generation with NEO-Unify Architecture."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10,<3.14"
+authors = [
+    { name = "OpenSenseNova" },
+]
+keywords = [
+    "multimodal",
+    "vision-language-model",
+    "unified-model",
+    "understanding-and-generation",
+    "native-vlm",
+]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "torch>=2.5,<2.9",
+    "transformers>=4.57.1,<4.58",
+    "numpy>=1.24,<3",
+    "pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+multi-gpu = [
+    "accelerate>=1,<2",
+]
+lora = [
+    "safetensors>=0.4,<1",
+]
+prompt-enhance = [
+    "httpx>=0.27,<1",
+]
+# Optional flash-attention acceleration. When absent, the model transparently
+# falls back to torch SDPA; see src/sensenova_u1/models/neo_unify/modeling_qwen3.py.
+#
+# The reference env uses a cp311 / torch 2.8 wheel (`flash_attn 2.8.3`). PyPI
+# does not host CUDA-specific wheels, so users will typically install this
+# manually from a local .whl that matches their torch + Python combination
+# (replace `cp311` with your interpreter's tag — cp310/cp311/cp312/cp313 are
+# all supported by upstream flash-attn releases), e.g.:
+#
+#   uv pip install /path/to/flash_attn-2.8.3+cu12torch28cxx11abitrue-cp311-cp311-*.whl
+flash = [
+    "flash-attn>=2.8,<3",
+]
+
+gguf = [
+    "accelerate>=1,<2",
+    "gguf>=0.10,<1",
+    "diffusers>=0.30,<1",
+]
+dev = [
+    "ruff",
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://github.com/OpenSenseNova/SenseNova-U1"
+Repository = "https://github.com/OpenSenseNova/SenseNova-U1"
+
+[project.scripts]
+sensenova-u1 = "sensenova_u1:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sensenova_u1"]
+
+# -----------------------------------------------------------------------------
+# uv configuration: install torch from the PyTorch cu128 index.
+#
+# If your NVIDIA driver is too old for CUDA 12.8, swap the URL below for a
+# compatible PyTorch index or remove the source override for CPU-only installs.
+# -----------------------------------------------------------------------------
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+    "src/sensenova_u1/models/neo_unify",
+    # Vendored verbatim from SenseNova-Skills; keep diff-clean for easy uprev.
+    "src/sensenova_u1/prompt_enhance/adapters",
+]
+
+[tool.ruff.lint]
+select = ["I"]
