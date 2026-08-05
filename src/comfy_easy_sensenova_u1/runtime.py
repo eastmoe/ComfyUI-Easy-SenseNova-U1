@@ -12,7 +12,11 @@ import numpy as np
 import torch
 from PIL import Image
 
-from .paths import ensure_origin_source
+from .compat import (
+    compatibility_report,
+    import_sensenova_backend,
+    load_model_and_tokenizer_compat,
+)
 
 
 MODEL_TYPE = "EASY_SENSENOVA_U1_MODEL"
@@ -134,6 +138,7 @@ class SenseNovaHandle:
     vram_mode: str
     prefetch_count: int
     device_map: str
+    compatibility: dict[str, str]
 
     @property
     def info(self) -> dict[str, Any]:
@@ -147,10 +152,11 @@ class SenseNovaHandle:
             "effective_attention_backend": self.effective_attention_backend,
             "vram_mode": self.vram_mode,
             "device_map": self.device_map,
+            "compatibility": self.compatibility,
         }
 
     def offload_context(self):
-        ensure_origin_source()
+        import_sensenova_backend()
         from sensenova_u1.utils import make_offload_ctx
 
         return make_offload_ctx(self.model, self.prefetch_count, self.device)
@@ -182,8 +188,7 @@ class _GenerationContext:
     def __enter__(self):
         try:
             self.stack.enter_context(_ATTENTION_LOCK)
-            ensure_origin_source()
-            import sensenova_u1
+            sensenova_u1 = import_sensenova_backend()
 
             sensenova_u1.set_attn_backend(self.handle.attention_backend)
             self.stack.enter_context(self.handle.compute_context())
@@ -207,9 +212,8 @@ def load_handle(
     max_memory: str,
     reload_model: bool,
 ) -> SenseNovaHandle:
-    ensure_origin_source()
-    import sensenova_u1
-    from sensenova_u1.utils import infer_input_device, load_model_and_tokenizer, vram_mode_to_prefetch_count
+    sensenova_u1 = import_sensenova_backend()
+    from sensenova_u1.utils import infer_input_device, vram_mode_to_prefetch_count
 
     resolved_device = resolve_device(device)
     prefetch_count = vram_mode_to_prefetch_count(vram_mode)
@@ -231,7 +235,7 @@ def load_handle(
             _MODEL_CACHE.clear()
             _clear_memory()
             sensenova_u1.set_attn_backend(attention_backend)
-            model, tokenizer = load_model_and_tokenizer(
+            model, tokenizer = load_model_and_tokenizer_compat(
                 model_path,
                 dtype=dtype_from_name(storage_precision),
                 device=resolved_device,
@@ -253,6 +257,7 @@ def load_handle(
                 vram_mode=vram_mode,
                 prefetch_count=prefetch_count,
                 device_map=device_map,
+                compatibility=compatibility_report(),
             )
         return _MODEL_CACHE[key]
 

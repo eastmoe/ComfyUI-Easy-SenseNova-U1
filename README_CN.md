@@ -31,6 +31,14 @@ pip install -r requirements.txt
 
 依赖文件只会额外安装 ComfyUI 官方依赖未包含的 `accelerate`。`transformers`、`numpy`、`Pillow` 以及它们提供的传递依赖均复用 ComfyUI 环境，原项目版本约束以注释形式保留在依赖文件中。
 
+## 兼容性
+
+- Transformers：支持 `4.57.1` 和 `5.x`。兼容层会在 5.x 下恢复 Qwen3 配置中移除的 `rope_theta` 属性，补齐新版权重初始化要求的 RoPE 方法，转换因果掩码接口，并按主版本选择 `torch_dtype`（4.x）或 `dtype`（5.x）加载参数。
+- PyTorch：已检查 `2.6`～`2.12` 使用到的张量、SDPA、自动混合精度和权重加载接口，并实测 `2.6`、`2.12` 两个边界版本。`2.6` 起 `torch.load` 默认使用 `weights_only=True`，原项目涉及的普通张量 state dict 可直接兼容；插件要求 `PyTorch>=2.6`。更高版本会显示“超出已检查范围”警告，但不会被强制阻止。
+- NumPy：支持 `1.24+` 的 1.x 与 2.x。节点只使用两代均保留的数组、类型和张量桥接接口，不依赖 NumPy 2.0 移除的旧类型别名。
+
+实际运行版本及兼容状态会出现在“模型加载”节点的“模型信息”输出中。`transformers<4.57.1`、`transformers>=6`、`PyTorch<2.6` 或 `NumPy<1.24/NumPy>=3` 会在加载前给出明确错误。
+
 ## 推荐工作流
 
 1. 运行“模型下载”，选择官方模型与下载源。
