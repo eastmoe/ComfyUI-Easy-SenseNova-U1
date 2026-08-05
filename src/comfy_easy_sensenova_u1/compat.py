@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+from contextlib import contextmanager
+from functools import wraps
 from typing import Any
 
 import numpy as np
@@ -22,7 +24,7 @@ LOGGER = logging.getLogger(__name__)
 MIN_TRANSFORMERS = Version("4.57.1")
 MAX_TRANSFORMERS = Version("6.0.0")
 MIN_TORCH = Version("2.6.0")
-MAX_CHECKED_TORCH = Version("2.13.0")
+MAX_CHECKED_TORCH = Version("2.14.0")
 MIN_NUMPY = Version("1.24.0")
 MAX_NUMPY = Version("3.0.0")
 _WARNED_UNCHECKED_TORCH = False
@@ -60,12 +62,12 @@ def compatibility_report() -> dict[str, str]:
             f"SenseNova-U1 需要 NumPy>=1.24,<3；当前为 {np.__version__}。"
         )
 
-    torch_status = "支持（已实测 2.6/2.12 边界）"
+    torch_status = "支持（已实测 2.6/2.12/2.13）"
     if torch_version >= MAX_CHECKED_TORCH:
         torch_status = "超出已检查范围（兼容模式）"
         if not _WARNED_UNCHECKED_TORCH:
             LOGGER.warning(
-                "PyTorch %s 超出本插件已检查的 2.6–2.12 范围，将继续使用兼容模式。",
+                "PyTorch %s 超出本插件已检查的 2.6–2.13 范围，将继续使用兼容模式。",
                 torch.__version__,
             )
             _WARNED_UNCHECKED_TORCH = True
@@ -84,9 +86,47 @@ def import_sensenova_backend():
     """Register and import the bundled backend after dependency validation."""
     compatibility_report()
     ensure_origin_source()
-    backend = importlib.import_module("sensenova_u1")
-    _patch_transformers_5_rope_initialization()
+    with _quiet_transformers_5_doc_import():
+        backend = importlib.import_module("sensenova_u1")
+        _patch_transformers_5_rope_initialization()
     return backend
+
+
+@contextmanager
+def _quiet_transformers_5_doc_import():
+    """隐藏 Transformers 5 对外部模型自动文档的非运行时校验噪声。"""
+    transformers = importlib.import_module("transformers")
+    if _version(transformers.__version__).major < 5:
+        yield
+        return
+
+    auto_docstring = importlib.import_module("transformers.utils.auto_docstring")
+    generic = importlib.import_module("transformers.utils.generic")
+    auto_docstring.HARDCODED_CONFIG_FOR_MODELS.setdefault(
+        "neo-unify", "NEOChatConfig"
+    )
+    missing = object()
+    original_print = vars(auto_docstring).get("print", missing)
+    original_generic_level = generic.logger.level
+
+    def filtered_print(*args, **kwargs):
+        message = " ".join(str(arg) for arg in args)
+        if message.startswith("[ERROR]") and (
+            "not documented" in message or "Config not found for neo-unify" in message
+        ):
+            return None
+        return print(*args, **kwargs)
+
+    auto_docstring.print = filtered_print
+    generic.logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        generic.logger.setLevel(original_generic_level)
+        if original_print is missing:
+            vars(auto_docstring).pop("print", None)
+        else:
+            auto_docstring.print = original_print
 
 
 def _patch_transformers_5_rope_initialization() -> None:
@@ -129,6 +169,26 @@ def _patch_transformers_5_rope_initialization() -> None:
         "sensenova_u1.models.neo_unify.modeling_qwen3_moe"
     )
     moe_modeling.create_causal_mask = create_causal_mask_compat
+
+    # Transformers 5 requires every top-level PreTrainedModel to complete
+    # post_init() before from_pretrained() computes an Accelerate device map.
+    # The bundled composite model predates that contract and otherwise lacks
+    # all_tied_weights_keys and the normalized placement metadata.
+    chat_modeling = importlib.import_module(
+        "sensenova_u1.models.neo_unify.modeling_neo_chat"
+    )
+    chat_class = chat_modeling.NEOChatModel
+    if not getattr(chat_class, "_easy_sensenova_post_init_compat", False):
+        original_init = chat_class.__init__
+
+        @wraps(original_init)
+        def init_with_transformers5_post_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            if not hasattr(self, "all_tied_weights_keys"):
+                self.post_init()
+
+        chat_class.__init__ = init_with_transformers5_post_init
+        chat_class._easy_sensenova_post_init_compat = True
     _BACKEND_PATCHED = True
 
 
