@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from typing import Any
 
 import torch
 
 from .download import FILE_VERIFICATIONS, OFFICIAL_REPOS, download_snapshot
 from .paths import available_models, resolve_model_path
-from .progress import DiffusionInferenceProgress, TokenInferenceProgress, throw_if_interrupted
+from .progress import (
+    DiffusionInferenceProgress,
+    ThinkingInferenceProgress,
+    TokenInferenceProgress,
+    throw_if_interrupted,
+)
 from .runtime import (
     ATTENTION_BACKENDS,
     CFG_NORMS,
@@ -16,10 +22,8 @@ from .runtime import (
     DEFAULT_SEED,
     DEFAULT_SYSTEM_MESSAGE,
     DEVICE_MAPS,
-    INTERLEAVE_RESOLUTIONS,
     MODEL_TYPE,
     STORAGE_PRECISIONS,
-    T2I_RESOLUTIONS,
     VRAM_MODES,
     SenseNovaHandle,
     available_devices,
@@ -48,7 +52,7 @@ def common_sampling_inputs(include_image_cfg: bool = False) -> dict[str, Any]:
         "cfg_interval_end": ("FLOAT", ui("CFG 终点", "CFG 生效区间终点。", default=1.0, min=0.0, max=1.0, step=0.01)),
         "num_steps": ("INT", ui("采样步数", "扩散采样步数。", default=50, min=1, max=200, step=1)),
         "seed": ("INT", ui("随机种子", "固定种子可复现结果。", default=DEFAULT_SEED, min=0, max=0x7FFFFFFF)),
-        "think_mode": ("BOOLEAN", ui("思考模式", "先生成推理文本，再完成图像任务。", default=False)),
+        "think_mode": ("BOOLEAN", ui("思考模式", "先生成推理文本，再完成图像任务。", default=True)),
     }
     if include_image_cfg:
         values = {
@@ -187,7 +191,8 @@ class ComfyEasySenseNovaTextToImage:
             "required": {
                 "model": (MODEL_TYPE, ui("SenseNova 模型", "连接模型加载节点。")),
                 "prompt": ("STRING", ui("提示词", "描述要生成的图像。", multiline=True, default="")),
-                "resolution": (list(T2I_RESOLUTIONS), ui("分辨率", "原项目训练推荐的约 2K 分辨率档位。")),
+                "width": ("INT", ui("图像宽度", "可自由设置，必须为 32 的倍数。", default=2048, min=32, max=8192, step=32)),
+                "height": ("INT", ui("图像高度", "可自由设置，必须为 32 的倍数。", default=2048, min=32, max=8192, step=32)),
                 **sampling,
                 "batch_size": ("INT", ui("批量数量", "一次生成的图像数量。", default=1, min=1, max=16)),
             }
@@ -199,14 +204,18 @@ class ComfyEasySenseNovaTextToImage:
     CATEGORY = CATEGORY
     DESCRIPTION = "使用 SenseNova-U1 执行文生图，支持普通模式、思考模式、tqdm 进度与停止。"
 
-    def generate(self, model: SenseNovaHandle, prompt, resolution, cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
+    def generate(self, model: SenseNovaHandle, prompt, width, height, cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
         if not prompt.strip():
             raise ValueError("提示词不能为空。")
-        width, height = T2I_RESOLUTIONS[resolution]
         validate_size(width, height)
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend, DiffusionInferenceProgress(
+        thinking_progress = (
+            ThinkingInferenceProgress(model.model, 1024, "SenseNova 文生图思考", "token")
+            if think_mode
+            else nullcontext()
+        )
+        with model.generation_context() as backend, thinking_progress, DiffusionInferenceProgress(
             backend, num_steps, "SenseNova 文生图采样"
         ):
             result = backend.t2i_generate(
@@ -262,7 +271,12 @@ class ComfyEasySenseNovaImageEdit:
         validate_size(width, height)
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend, DiffusionInferenceProgress(
+        thinking_progress = (
+            ThinkingInferenceProgress(model.model, 1024, "SenseNova 图像编辑思考", "token")
+            if think_mode
+            else nullcontext()
+        )
+        with model.generation_context() as backend, thinking_progress, DiffusionInferenceProgress(
             backend, num_steps, "SenseNova 图像编辑采样"
         ):
             result = backend.it2i_generate(
@@ -360,7 +374,8 @@ class ComfyEasySenseNovaInterleave:
             "required": {
                 "model": (MODEL_TYPE, ui("SenseNova 模型", "连接模型加载节点。")),
                 "prompt": ("STRING", ui("提示词", "描述需要生成的图文内容；可包含多步任务。", multiline=True, default="")),
-                "resolution": (list(INTERLEAVE_RESOLUTIONS), ui("图像分辨率", "交错模式生成图像的推荐尺寸。")),
+                "width": ("INT", ui("图像宽度", "每张生成图像的宽度，必须为 32 的倍数。", default=1536, min=32, max=8192, step=32)),
+                "height": ("INT", ui("图像高度", "每张生成图像的高度，必须为 32 的倍数。", default=1536, min=32, max=8192, step=32)),
                 "system_message": ("STRING", ui("系统提示词", "约束思考、文本与图像交错格式。", multiline=True, default=DEFAULT_SYSTEM_MESSAGE)),
                 "cfg_scale": ("FLOAT", ui("文本 CFG", "文本条件引导强度。", default=4.0, min=0.0, max=20.0, step=0.1)),
                 "img_cfg_scale": ("FLOAT", ui("图像 CFG", "输入图像条件引导强度。", default=1.0, min=0.0, max=20.0, step=0.1)),
@@ -383,15 +398,19 @@ class ComfyEasySenseNovaInterleave:
     CATEGORY = CATEGORY
     DESCRIPTION = "SenseNova-U1 原生图文交错生成，输出文本中的 <image> 与图像批次按顺序对应；显示可停止的采样进度。"
 
-    def generate(self, model: SenseNovaHandle, prompt, resolution, system_message, cfg_scale, img_cfg_scale, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, max_images, seed, think_mode, image=None):
+    def generate(self, model: SenseNovaHandle, prompt, width, height, system_message, cfg_scale, img_cfg_scale, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, max_images, seed, think_mode, image=None):
         if not prompt.strip():
             raise ValueError("提示词不能为空。")
-        width, height = INTERLEAVE_RESOLUTIONS[resolution]
         validate_size(width, height)
         input_images = comfy_to_pil_batch(image) if image is not None else []
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend, DiffusionInferenceProgress(
+        thinking_progress = (
+            ThinkingInferenceProgress(model.model, 8192, "SenseNova 图文交错思考/文本", "token")
+            if think_mode
+            else nullcontext()
+        )
+        with model.generation_context() as backend, thinking_progress, DiffusionInferenceProgress(
             backend, num_steps * max_images, "SenseNova 图文交错采样"
         ):
             text, image_tensors = backend.interleave_gen(

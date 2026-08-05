@@ -133,3 +133,24 @@ class TokenInferenceProgress(_ModelProgress):
                 return False
 
         return StoppingCriteriaList([_ProgressAndInterruptCriteria()])
+
+
+class ThinkingInferenceProgress(_ModelProgress):
+    """跟踪模型思考阶段的逐 token 前向计算。"""
+
+    def __enter__(self):
+        super().__enter__()
+        language_model = getattr(self.model, "language_model", None)
+        if language_model is not None and hasattr(language_model, "register_forward_pre_hook"):
+            self._hooks.append(
+                language_model.register_forward_pre_hook(self._track_token, with_kwargs=True)
+            )
+        return self
+
+    def _track_token(self, _module: Any, _args: Any, kwargs: dict[str, Any]) -> None:
+        throw_if_interrupted()
+        input_ids = kwargs.get("input_ids")
+        # SenseNova 的思考/交错文本解码每次只送入一个新 token；提示词前向和
+        # 向缓存追加成段文本不应计入思考进度。
+        if input_ids is not None and getattr(input_ids, "numel", lambda: 0)() == 1:
+            self.step()

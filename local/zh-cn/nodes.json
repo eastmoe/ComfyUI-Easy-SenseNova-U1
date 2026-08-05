@@ -13,7 +13,8 @@
     "cfg_interval_start": {"display_name": "CFG 起点", "tooltip": "CFG 生效区间起点。"},
     "cfg_interval_end": {"display_name": "CFG 终点", "tooltip": "CFG 生效区间终点。"},
     "num_steps": {"display_name": "采样步数", "tooltip": "扩散采样步数。"},
-    "resolution": {"display_name": "分辨率", "tooltip": "选择原模型推荐分辨率档位。"}
+    "width": {"display_name": "图像宽度", "tooltip": "自由设置图像宽度，必须为 32 的倍数。"},
+    "height": {"display_name": "图像高度", "tooltip": "自由设置图像高度，必须为 32 的倍数。"}
   },
   "nodes": {
     "ComfyEasySenseNovaDownloadModel": {
@@ -61,7 +62,8 @@
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "prompt": {"display_name": "提示词"},
-        "resolution": {"display_name": "分辨率"},
+        "width": {"display_name": "图像宽度"},
+        "height": {"display_name": "图像高度"},
         "cfg_scale": {"display_name": "文本 CFG"},
         "cfg_norm": {"display_name": "CFG 归一化"},
         "timestep_shift": {"display_name": "时间步偏移"},
@@ -129,7 +131,8 @@
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "prompt": {"display_name": "提示词"},
-        "resolution": {"display_name": "图像分辨率"},
+        "width": {"display_name": "图像宽度"},
+        "height": {"display_name": "图像高度"},
         "system_message": {"display_name": "系统提示词"},
         "cfg_scale": {"display_name": "文本 CFG"},
         "img_cfg_scale": {"display_name": "图像 CFG"},

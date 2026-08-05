@@ -29,28 +29,6 @@ VRAM_MODES = ("full", "balanced", "low")
 DEVICE_MAPS = ("none", "auto", "balanced", "balanced_low_0", "sequential")
 CFG_NORMS = ("none", "global", "channel", "cfg_zero_star")
 
-T2I_RESOLUTIONS = {
-    "2048x2048 (1:1)": (2048, 2048),
-    "2720x1536 (16:9)": (2720, 1536),
-    "1536x2720 (9:16)": (1536, 2720),
-    "2496x1664 (3:2)": (2496, 1664),
-    "1664x2496 (2:3)": (1664, 2496),
-    "2368x1760 (4:3)": (2368, 1760),
-    "1760x2368 (3:4)": (1760, 2368),
-    "2880x1440 (2:1)": (2880, 1440),
-    "1440x2880 (1:2)": (1440, 2880),
-    "3456x1152 (3:1)": (3456, 1152),
-    "1152x3456 (1:3)": (1152, 3456),
-}
-INTERLEAVE_RESOLUTIONS = {
-    "1536x1536 (1:1)": (1536, 1536),
-    "2048x1152 (16:9)": (2048, 1152),
-    "1152x2048 (9:16)": (1152, 2048),
-    "1888x1248 (3:2)": (1888, 1248),
-    "1248x1888 (2:3)": (1248, 1888),
-    "1760x1312 (4:3)": (1760, 1312),
-    "1312x1760 (3:4)": (1312, 1760),
-}
 DEFAULT_SYSTEM_MESSAGE = """You are a multimodal assistant capable of reasoning with text and images.
 In Think Mode, place reasoning in <think></think> and interleave generated images with <image> tags.
 After reasoning, provide a concise user-facing answer. Match the user's language."""
