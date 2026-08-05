@@ -6,13 +6,14 @@ readme = "README_CN.md"
 requires-python = ">=3.10,<3.14"
 license = { file = "origin/SenseNova-U1/LICENSE" }
 dependencies = [
-  # ComfyUI 官方直接依赖：transformers、numpy、Pillow。
+  # ComfyUI 官方直接依赖：transformers、numpy、Pillow、tqdm。
   # ComfyUI 官方依赖的传递依赖：huggingface-hub、packaging。
   # 原项目约束留档：
   # "transformers>=4.57.1,<4.58",
   # "huggingface-hub>=0.34,<2",
   # "numpy>=1.24,<3",
   # "pillow>=10,<13",
+  # "tqdm>=4.66",
   # "packaging>=23",
   "accelerate>=1,<2",
 ]

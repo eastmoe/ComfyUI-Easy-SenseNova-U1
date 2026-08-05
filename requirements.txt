@@ -2,6 +2,7 @@
 # transformers>=4.57.1,<4.58
 # numpy>=1.24,<3
 # pillow>=10,<13
+# tqdm>=4.66
 
 # 以下依赖由 ComfyUI 的 transformers 等官方依赖间接提供：
 # huggingface-hub>=0.34,<2

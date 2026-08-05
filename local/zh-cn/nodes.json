@@ -23,11 +23,14 @@
         "repo_id": {"display_name": "仓库 ID", "tooltip": "仅自定义仓库时生效；选择官方预设时忽略。"},
         "model_subfolder": {"display_name": "模型子文件夹", "tooltip": "仅自定义仓库时生效；官方预设自动使用仓库名。"},
         "download_source": {"display_name": "下载源", "tooltip": "选择 Hugging Face 或 hf-mirror。"},
+        "download_threads": {"display_name": "并行下载线程", "tooltip": "同时下载的文件数。"},
+        "xet_connections": {"display_name": "Xet 单文件连接数", "tooltip": "每个 Xet 文件的并发范围请求数。"},
         "revision": {"display_name": "版本", "tooltip": "可选 branch、tag 或 commit。"},
         "token": {"display_name": "访问令牌", "tooltip": "仅私有或受限仓库需要。"},
         "disable_tls": {"display_name": "关闭 TLS 校验", "tooltip": "仅在可信网络排障时开启。"},
         "disable_xet": {"display_name": "关闭 Xet", "tooltip": "使用普通 HTTP 下载，提高镜像兼容性。"},
-        "force_download": {"display_name": "强制重新下载", "tooltip": "忽略已有模型并重新下载。"}
+        "file_verification": {"display_name": "文件校验", "tooltip": "可选择大小校验、大小和 SHA256 校验或关闭。"},
+        "force_download": {"display_name": "强制重新下载", "tooltip": "关闭时断点续传；开启后强制重新下载。"}
       },
       "outputs": {
         "模型路径": {"display_name": "模型路径"},

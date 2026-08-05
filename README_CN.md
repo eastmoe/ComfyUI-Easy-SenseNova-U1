@@ -10,7 +10,7 @@ SenseNova-U1 的 ComfyUI 本地推理节点。节点位于右键菜单：
 
 ## 节点
 
-- **SenseNova-U1 模型下载**：支持 Hugging Face、hf-mirror、指定 revision、访问令牌、关闭 TLS 校验、关闭 Xet 和强制重新下载。每个仓库保存到 `models/SenseNova` 下独立的子文件夹。
+- **SenseNova-U1 模型下载**：支持 Hugging Face、hf-mirror、并行文件下载、Xet 单文件连接数、自动断点续传、大小/SHA256 校验、指定 revision、访问令牌、关闭 TLS 校验和强制重新下载。每个仓库保存到 `models/SenseNova` 下独立的子文件夹；下载与校验进度同步到终端和 ComfyUI。
 - **SenseNova-U1 模型加载**：支持权重存储精度、推理计算精度、注意力机制、单设备、多卡 `device_map` 和低显存层卸载。
 - **SenseNova-U1 文生图**：普通生成及 Think Mode，使用原项目推荐的约 2K 分辨率档位。
 - **SenseNova-U1 图像编辑**：支持单图或 IMAGE 批次多图参考、自动输出分辨率和 Think Mode。
@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 重启 ComfyUI。若使用 `flash` 注意力机制，还需单独安装与当前 Python、PyTorch、CUDA 匹配的 `flash-attn` wheel；否则使用 `auto` 或 `sdpa`。
 
-依赖文件只会额外安装 ComfyUI 官方依赖未包含的 `accelerate`。`transformers`、`numpy`、`Pillow` 以及它们提供的传递依赖均复用 ComfyUI 环境，原项目版本约束以注释形式保留在依赖文件中。
+依赖文件只会额外安装 ComfyUI 官方依赖未包含的 `accelerate`。`transformers`、`numpy`、`Pillow`、`tqdm` 以及它们提供的传递依赖均复用 ComfyUI 环境，原项目版本约束以注释形式保留在依赖文件中。
 
 ## 兼容性
 
@@ -60,6 +60,10 @@ pip install -r requirements.txt
 - SenseNova-U1 推荐约 2K 输出，显存不仅由权重决定，生成分辨率、KV Cache、批量数量和交错图像数也会显著影响峰值显存。
 - `vram_mode != full` 与多卡 `device_map != none` 互斥。
 - 关闭 TLS 证书校验会降低连接安全性，仅建议在可信网络中临时排障。
+- 下载线程控制同时下载的文件数量；Xet 连接数控制每个大文件的并发范围请求。过高的组合会增加内存与磁盘压力，建议先使用默认值 `8` 和 `16`。
+- 未启用“强制重新下载”时，Hugging Face Hub 会复用完整文件并从未完成文件继续下载。下载结束后的“大小”校验速度较快；“大小和 SHA256”会重新读取大型权重文件，耗时取决于磁盘速度。
+- 所有推理节点均显示终端 `tqdm` 和 ComfyUI 前端进度：图像任务按真实扩散采样步计数，视觉问答按生成 token 计数。思考阶段也会持续检查中断状态。
+- 下载、等待下载锁、SHA256 校验、思考、逐 token 解码及每个扩散采样步均响应 ComfyUI“停止”按钮；停止后保留 Hugging Face 未完成文件，下次关闭“强制重新下载”运行时可继续续传。
 - 图文交错文本中的 `<image>` 标签与“生成图像”批次按出现顺序对应；若本次没有生成图片，图像接口返回一个 1×1 黑色占位图，以保持 ComfyUI 接口稳定。
 
 ## 原项目

@@ -6,8 +6,9 @@ from typing import Any
 
 import torch
 
-from .download import OFFICIAL_REPOS, download_snapshot
+from .download import FILE_VERIFICATIONS, OFFICIAL_REPOS, download_snapshot
 from .paths import available_models, resolve_model_path
+from .progress import DiffusionInferenceProgress, TokenInferenceProgress, throw_if_interrupted
 from .runtime import (
     ATTENTION_BACKENDS,
     CFG_NORMS,
@@ -73,7 +74,10 @@ class ComfyEasySenseNovaDownloadModel:
                 "token": ("STRING", ui("访问令牌", "私有/受限仓库令牌；留空使用本机已登录凭据。", default="", password=True)),
                 "disable_tls": ("BOOLEAN", ui("关闭 TLS 校验", "仅在可信网络排障时关闭证书校验。", default=False)),
                 "disable_xet": ("BOOLEAN", ui("关闭 Xet", "强制使用常规 HTTP 下载，镜像兼容性更好。", default=True)),
-                "force_download": ("BOOLEAN", ui("强制重新下载", "忽略本地 config.json 并重新下载快照。", default=False)),
+                "force_download": ("BOOLEAN", ui("强制重新下载", "关闭时自动复用完整文件并断点续传；开启后强制重新下载。", default=False)),
+                "download_threads": ("INT", ui("并行下载线程", "同时下载的文件数；线程越多越占用网络、内存和磁盘 IO。", default=8, min=1, max=64, step=1)),
+                "xet_connections": ("INT", ui("Xet 单文件连接数", "每个 Xet 文件的并发范围请求数；仅未关闭 Xet 时生效。", default=16, min=1, max=64, step=1)),
+                "file_verification": (list(FILE_VERIFICATIONS), ui("文件校验", "大小校验较快；SHA256 会完整读取所有带远端哈希的权重文件。")),
             }
         }
 
@@ -82,7 +86,7 @@ class ComfyEasySenseNovaDownloadModel:
     FUNCTION = "download"
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
-    DESCRIPTION = "将 SenseNova-U1 模型下载到 ComfyUI/models/SenseNova 的不同子文件夹。"
+    DESCRIPTION = "将 SenseNova-U1 模型下载到 ComfyUI/models/SenseNova 的不同子文件夹；显示进度并支持停止与续传。"
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -95,7 +99,21 @@ class ComfyEasySenseNovaDownloadModel:
         payload = json.dumps(effective, sort_keys=True, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-    def download(self, model_preset, repo_id, model_subfolder, download_source, revision, token, disable_tls, disable_xet, force_download):
+    def download(
+        self,
+        model_preset,
+        repo_id,
+        model_subfolder,
+        download_source,
+        revision,
+        token,
+        disable_tls,
+        disable_xet,
+        force_download,
+        download_threads=8,
+        xet_connections=16,
+        file_verification="大小",
+    ):
         preset_repo = OFFICIAL_REPOS.get(model_preset)
         resolved_repo = preset_repo or repo_id
         resolved_subfolder = "" if preset_repo else model_subfolder
@@ -108,6 +126,9 @@ class ComfyEasySenseNovaDownloadModel:
             disable_tls,
             disable_xet,
             force_download,
+            download_threads,
+            xet_connections,
+            file_verification,
         )
 
 
@@ -176,7 +197,7 @@ class ComfyEasySenseNovaTextToImage:
     RETURN_NAMES = ("图像", "思考文本", "元数据")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
-    DESCRIPTION = "使用 SenseNova-U1 执行文生图，支持普通模式与思考模式。"
+    DESCRIPTION = "使用 SenseNova-U1 执行文生图，支持普通模式、思考模式、tqdm 进度与停止。"
 
     def generate(self, model: SenseNovaHandle, prompt, resolution, cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
         if not prompt.strip():
@@ -185,7 +206,9 @@ class ComfyEasySenseNovaTextToImage:
         validate_size(width, height)
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend:
+        with model.generation_context() as backend, DiffusionInferenceProgress(
+            backend, num_steps, "SenseNova 文生图采样"
+        ):
             result = backend.t2i_generate(
                 model.tokenizer,
                 prompt,
@@ -228,7 +251,7 @@ class ComfyEasySenseNovaImageEdit:
     RETURN_NAMES = ("编辑图像", "思考文本", "元数据")
     FUNCTION = "edit"
     CATEGORY = CATEGORY
-    DESCRIPTION = "SenseNova-U1 图像编辑，可把 IMAGE 批次作为多张参考图。"
+    DESCRIPTION = "SenseNova-U1 图像编辑，可把 IMAGE 批次作为多张参考图，并显示可停止的采样进度。"
 
     def edit(self, model: SenseNovaHandle, image: torch.Tensor, prompt, auto_size, width, height, target_megapixels, cfg_scale, img_cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
         if not prompt.strip():
@@ -239,7 +262,9 @@ class ComfyEasySenseNovaImageEdit:
         validate_size(width, height)
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend:
+        with model.generation_context() as backend, DiffusionInferenceProgress(
+            backend, num_steps, "SenseNova 图像编辑采样"
+        ):
             result = backend.it2i_generate(
                 model.tokenizer,
                 prompt,
@@ -282,7 +307,7 @@ class ComfyEasySenseNovaVisionQA:
     RETURN_NAMES = ("回答", "回答列表 JSON", "元数据")
     FUNCTION = "answer"
     CATEGORY = CATEGORY
-    DESCRIPTION = "SenseNova-U1 视觉理解与视觉问答，图像批次会逐张回答。"
+    DESCRIPTION = "SenseNova-U1 视觉理解与视觉问答，图像批次会逐张回答，并显示可停止的 token 进度。"
 
     def answer(self, model: SenseNovaHandle, image: torch.Tensor, question, max_new_tokens, do_sample, temperature, top_p, top_k, repetition_penalty):
         if not question.strip():
@@ -296,22 +321,32 @@ class ComfyEasySenseNovaVisionQA:
                 config["top_k"] = top_k
         if repetition_penalty != 1.0:
             config["repetition_penalty"] = repetition_penalty
+        input_images = comfy_to_pil_batch(image)
         answers = []
-        for pil_image in comfy_to_pil_batch(image):
-            pixel_values, grid_hw = load_image_native(pil_image)
-            pixel_values = pixel_values.to(model.input_device, dtype=model.model.dtype)
-            grid_hw = grid_hw.to(model.input_device)
-            with model.generation_context() as backend:
-                response, _ = backend.chat(
-                    model.tokenizer,
-                    pixel_values,
-                    question,
-                    config.copy(),
-                    history=None,
-                    return_history=True,
-                    grid_hw=grid_hw,
-                )
-            answers.append(response)
+        with TokenInferenceProgress(
+            model.model,
+            max_new_tokens * len(input_images),
+            "SenseNova 视觉问答推理",
+            "token",
+        ) as progress:
+            for pil_image in input_images:
+                throw_if_interrupted()
+                pixel_values, grid_hw = load_image_native(pil_image)
+                pixel_values = pixel_values.to(model.input_device, dtype=model.model.dtype)
+                grid_hw = grid_hw.to(model.input_device)
+                request_config = config.copy()
+                request_config["stopping_criteria"] = progress.stopping_criteria()
+                with model.generation_context() as backend:
+                    response, _ = backend.chat(
+                        model.tokenizer,
+                        pixel_values,
+                        question,
+                        request_config,
+                        history=None,
+                        return_history=True,
+                        grid_hw=grid_hw,
+                    )
+                answers.append(response)
         joined = answers[0] if len(answers) == 1 else "\n\n".join(f"[{i + 1}] {answer}" for i, answer in enumerate(answers))
         return joined, json.dumps(answers, ensure_ascii=False, indent=2), metadata(model, "vision_qa", image_count=len(answers), max_new_tokens=max_new_tokens)
 
@@ -346,7 +381,7 @@ class ComfyEasySenseNovaInterleave:
     RETURN_NAMES = ("生成图像", "交错文本", "元数据")
     FUNCTION = "generate"
     CATEGORY = CATEGORY
-    DESCRIPTION = "SenseNova-U1 原生图文交错生成，输出文本中的 <image> 与图像批次按顺序对应。"
+    DESCRIPTION = "SenseNova-U1 原生图文交错生成，输出文本中的 <image> 与图像批次按顺序对应；显示可停止的采样进度。"
 
     def generate(self, model: SenseNovaHandle, prompt, resolution, system_message, cfg_scale, img_cfg_scale, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, max_images, seed, think_mode, image=None):
         if not prompt.strip():
@@ -356,7 +391,9 @@ class ComfyEasySenseNovaInterleave:
         input_images = comfy_to_pil_batch(image) if image is not None else []
         if cfg_interval_start > cfg_interval_end:
             raise ValueError("CFG 起点不能大于 CFG 终点。")
-        with model.generation_context() as backend:
+        with model.generation_context() as backend, DiffusionInferenceProgress(
+            backend, num_steps * max_images, "SenseNova 图文交错采样"
+        ):
             text, image_tensors = backend.interleave_gen(
                 model.tokenizer,
                 prompt,
@@ -374,6 +411,7 @@ class ComfyEasySenseNovaInterleave:
             )
         generated = []
         for tensor in image_tensors:
+            throw_if_interrupted()
             batch = tensor if tensor.ndim == 4 else tensor.unsqueeze(0)
             generated.append(generated_to_comfy(batch)[0])
         output = torch.stack(generated) if generated else torch.zeros((1, 1, 1, 3), dtype=torch.float32)
