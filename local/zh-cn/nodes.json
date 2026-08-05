@@ -19,9 +19,9 @@
     "ComfyEasySenseNovaDownloadModel": {
       "display_name": "SenseNova-U1 模型下载",
       "inputs": {
-        "model_preset": {"display_name": "模型预设", "tooltip": "选择官方模型或自定义 Hugging Face 仓库。"},
-        "repo_id": {"display_name": "仓库 ID", "tooltip": "自定义仓库应使用“组织/仓库”格式。"},
-        "model_subfolder": {"display_name": "模型子文件夹", "tooltip": "保存到 models/SenseNova 下的独立子目录。"},
+        "model_preset": {"display_name": "模型预设", "tooltip": "选择官方模型；选择自定义后填写仓库 ID 和模型子文件夹。"},
+        "repo_id": {"display_name": "仓库 ID", "tooltip": "仅自定义仓库时生效；选择官方预设时忽略。"},
+        "model_subfolder": {"display_name": "模型子文件夹", "tooltip": "仅自定义仓库时生效；官方预设自动使用仓库名。"},
         "download_source": {"display_name": "下载源", "tooltip": "选择 Hugging Face 或 hf-mirror。"},
         "revision": {"display_name": "版本", "tooltip": "可选 branch、tag 或 commit。"},
         "token": {"display_name": "访问令牌", "tooltip": "仅私有或受限仓库需要。"},

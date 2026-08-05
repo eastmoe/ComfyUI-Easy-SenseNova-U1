@@ -65,9 +65,9 @@ class ComfyEasySenseNovaDownloadModel:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model_preset": (list(OFFICIAL_REPOS), ui("模型预设", "选择官方模型；选择自定义后填写仓库 ID。")),
-                "repo_id": ("STRING", ui("仓库 ID", "自定义 Hugging Face 仓库，官方预设会覆盖此值。", default="sensenova/SenseNova-U1-8B-MoT")),
-                "model_subfolder": ("STRING", ui("模型子文件夹", "下载到 models/SenseNova 下的独立子目录；留空使用仓库名。", default="")),
+                "model_preset": (list(OFFICIAL_REPOS), ui("模型预设", "选择官方模型；选择自定义后填写仓库 ID 和模型子文件夹。")),
+                "repo_id": ("STRING", ui("仓库 ID", "仅自定义仓库时生效；选择官方预设时忽略。", default="sensenova/SenseNova-U1-8B-MoT")),
+                "model_subfolder": ("STRING", ui("模型子文件夹", "仅自定义仓库时生效；官方预设自动使用仓库名。", default="")),
                 "download_source": (["huggingface", "hfmirror"], ui("下载源", "选择 Hugging Face 官方站或 hf-mirror。")),
                 "revision": ("STRING", ui("版本", "可选 branch、tag 或 commit；留空使用默认分支。", default="")),
                 "token": ("STRING", ui("访问令牌", "私有/受限仓库令牌；留空使用本机已登录凭据。", default="", password=True)),
@@ -81,20 +81,27 @@ class ComfyEasySenseNovaDownloadModel:
     RETURN_NAMES = ("模型路径", "下载状态")
     FUNCTION = "download"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
     DESCRIPTION = "将 SenseNova-U1 模型下载到 ComfyUI/models/SenseNova 的不同子文件夹。"
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         if kwargs.get("force_download"):
             return float("nan")
-        payload = json.dumps(kwargs, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        effective = dict(kwargs)
+        if OFFICIAL_REPOS.get(effective.get("model_preset", "")):
+            effective["repo_id"] = ""
+            effective["model_subfolder"] = ""
+        payload = json.dumps(effective, sort_keys=True, ensure_ascii=False).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
     def download(self, model_preset, repo_id, model_subfolder, download_source, revision, token, disable_tls, disable_xet, force_download):
-        resolved_repo = OFFICIAL_REPOS.get(model_preset) or repo_id
+        preset_repo = OFFICIAL_REPOS.get(model_preset)
+        resolved_repo = preset_repo or repo_id
+        resolved_subfolder = "" if preset_repo else model_subfolder
         return download_snapshot(
             resolved_repo,
-            model_subfolder,
+            resolved_subfolder,
             download_source,
             revision,
             token,
