@@ -13,6 +13,7 @@ from .paths import models_root
 
 DOWNLOAD_LOCK = threading.RLock()
 OFFICIAL_REPOS = {
+    "SenseNova-U1.5-8B-MoT-Preview": "sensenova/SenseNova-U1.5-8B-MoT-Preview",
     "SenseNova-U1-8B-MoT": "sensenova/SenseNova-U1-8B-MoT",
     "SenseNova-U1-A3B-MoT": "sensenova/SenseNova-U1-A3B-MoT",
     "SenseNova-U1-8B-MoT-Infographic": "sensenova/SenseNova-U1-8B-MoT-Infographic",
