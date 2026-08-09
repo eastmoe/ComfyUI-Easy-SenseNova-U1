@@ -22,7 +22,8 @@ from .backend import (
 MODEL_TYPE = "EASY_SENSENOVA_U1_MODEL"
 DEFAULT_SEED = 42
 GRID_SIZE = 32
-STORAGE_PRECISIONS = ("bfloat16", "float16", "float32")
+MX_STORAGE_PRECISIONS = ("mxfp8", "mxfp4")
+STORAGE_PRECISIONS = ("bfloat16", "float16", "float32", *MX_STORAGE_PRECISIONS)
 COMPUTE_PRECISIONS = ("auto", "bfloat16", "float16", "float32")
 ATTENTION_BACKENDS = ("auto", "flash", "sdpa")
 VRAM_MODES = ("full", "balanced", "low")
@@ -92,10 +93,12 @@ def generated_to_comfy(batch: torch.Tensor) -> torch.Tensor:
 
 
 def _clear_memory() -> None:
+    """卸载 ComfyUI 已托管模型并释放设备缓存。"""
     gc.collect()
     try:
         import comfy.model_management as mm
 
+        mm.unload_all_models()
         mm.soft_empty_cache()
     except Exception:
         if torch.cuda.is_available():
@@ -140,6 +143,9 @@ class SenseNovaHandle:
         return make_offload_ctx(self.model, self.prefetch_count, self.device)
 
     def compute_context(self):
+        if self.storage_precision in MX_STORAGE_PRECISIONS:
+            # MX Linear 自己按 compute_precision 解量化计算，外层无需 autocast。
+            return nullcontext()
         precision = self.storage_precision if self.compute_precision == "auto" else self.compute_precision
         if precision == self.storage_precision:
             return nullcontext()
@@ -189,6 +195,7 @@ def load_handle(
     device_map: str,
     max_memory: str,
     reload_model: bool,
+    clear_memory_before_load: bool = False,
 ) -> SenseNovaHandle:
     sensenova_u1 = import_sensenova_backend()
     from sensenova_u1.utils import infer_input_device, vram_mode_to_prefetch_count
@@ -211,15 +218,27 @@ def load_handle(
     with _CACHE_LOCK:
         if reload_model or key not in _MODEL_CACHE:
             _MODEL_CACHE.clear()
-            _clear_memory()
+            gc.collect()
+            if clear_memory_before_load:
+                _clear_memory()
             sensenova_u1.set_attn_backend(attention_backend)
+            dynamic_mx_precision = (
+                storage_precision if storage_precision in MX_STORAGE_PRECISIONS else None
+            )
+            mx_compute_precision = (
+                "bfloat16" if compute_precision == "auto" else compute_precision
+            )
             model, tokenizer = load_model_and_tokenizer(
                 model_path,
-                dtype=dtype_from_name(storage_precision),
+                dtype=torch.bfloat16 if dynamic_mx_precision else dtype_from_name(storage_precision),
                 device=resolved_device,
                 device_map=normalized_map,
                 max_memory=max_memory.strip() or None,
                 for_offload=prefetch_count > 0,
+                dynamic_mx_precision=dynamic_mx_precision,
+                mx_compute_dtype=(
+                    dtype_from_name(mx_compute_precision) if dynamic_mx_precision else None
+                ),
             )
             input_device = str(infer_input_device(model, fallback=resolved_device))
             _MODEL_CACHE[key] = SenseNovaHandle(

@@ -11,7 +11,7 @@ SenseNova-U1 的 ComfyUI 本地推理节点。节点位于右键菜单：
 ## 节点
 
 - **SenseNova-U1 模型下载**：支持 Hugging Face、hf-mirror、并行文件下载、Xet 单文件连接数、自动断点续传、大小/SHA256 校验、指定 revision、访问令牌、关闭 TLS 校验和强制重新下载。每个仓库保存到 `models/SenseNova` 下独立的子文件夹；下载与校验进度同步到终端和 ComfyUI。
-- **SenseNova-U1 模型加载**：支持权重存储精度、推理计算精度、注意力机制、单设备、多卡 `device_map` 和低显存层卸载。
+- **SenseNova-U1 模型加载**：支持浮点权重存储精度、MXFP8/MXFP4 边加载边动态量化、加载前清理显存、推理计算精度、注意力机制、单设备、多卡 `device_map` 和低显存层卸载。
 - **SenseNova-U1 文生图**：默认开启 Think Mode，宽高可按 32 的倍数自由设置。
 - **SenseNova-U1 图像编辑**：支持单图或 IMAGE 批次多图参考、自动输出分辨率，并默认开启 Think Mode。
 - **SenseNova-U1 视觉问答**：支持图片描述、视觉问答、贪心或采样解码；输入批次时逐张回答。
@@ -29,6 +29,8 @@ pip install -r requirements.txt
 
 重启 ComfyUI。若使用 `flash` 注意力机制，还需单独安装与当前 Python、PyTorch、CUDA 匹配的 `flash-attn` wheel；否则使用 `auto` 或 `sdpa`。Transformers `4.57.1` 源码快照随插件放在 `transformer_patch/transformers_4571`。
 
+MXFP8/MXFP4 动态加载还需要安装与当前 PyTorch 版本匹配的 `torchao>=0.16`。读取线性层权重时会直接压缩，避免先建立完整 BF16 模型；存储精度与计算精度彼此独立，前向时权重按需解量化到所选 BF16、FP16 或 FP32，`auto` 使用 BF16。该权重存储路径不依赖 MX 专用矩阵乘内核，也不限制设备、显存模式或 `device_map`。
+
 ## 兼容性
 
 - Transformers：模型配置、注册、tokenizer、权重加载、生成停止条件及 SenseNova 后端全部固定走插件私有 `4.57.1`。全局 Transformers 可以是 ComfyUI 所需的任意版本。
@@ -44,6 +46,7 @@ pip install -r requirements.txt
    - 显存充足：显存模式 `full`。
    - 单卡低显存：显存模式 `balanced` 或 `low`，多卡映射保持 `none`。
    - 多卡：显存模式 `full`，多卡映射选择 `auto`，可填写 `0=20GiB,1=20GiB,cpu=64GiB`。
+   - 需要压缩权重驻留空间时可选 `mxfp8` 或 `mxfp4`，并独立选择计算精度；首次切换模型时可开启“加载前清理显存”。
 3. 把加载节点的模型输出连接到任一推理节点。
 
 ## 注意事项

@@ -19,6 +19,9 @@ dependencies = [
   "accelerate>=1,<2",
 ]
 
+[project.optional-dependencies]
+mx = ["torchao>=0.16"]
+
 [project.urls]
 Repository = "https://github.com/OpenSenseNova/SenseNova-U1"
 
