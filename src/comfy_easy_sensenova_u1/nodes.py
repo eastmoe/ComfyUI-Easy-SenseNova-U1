@@ -477,7 +477,7 @@ def _native_checkpoint_choices() -> list[str]:
             continue
         if metadata.get("comfyui_model_family") == "sensenova_u1":
             choices.append(name)
-    return ["<使用 HF 模型目录>", *choices]
+    return choices or ["<未找到 SenseNova checkpoint>"]
 
 
 class ComfyEasySenseNovaLoader:
@@ -485,18 +485,13 @@ class ComfyEasySenseNovaLoader:
 
     @classmethod
     def INPUT_TYPES(cls):
-        hf_choices = available_models() or ["<未找到模型>"]
         return {
             "required": {
-                "checkpoint_name": (_native_checkpoint_choices(), ui("Checkpoint", "由 tools/convert_hf_to_comfy_checkpoint.py 生成的单文件权重；选择首项可直接使用原 HF 目录。")),
-                "hf_model_name": (hf_choices, ui("HF 模型目录", "checkpoint 选择“使用 HF 模型目录”时生效。")),
+                "checkpoint_name": (_native_checkpoint_choices(), ui("Checkpoint", "选择由 tools/convert_hf_to_comfy_checkpoint.py 生成并放入 models/checkpoints 的 SenseNova 单文件权重。")),
                 "storage_precision": (["bfloat16", "float16", "float32"], ui("加载精度", "BF16 checkpoint 推荐保持 bfloat16；此选项是加载时转换，不是量化。")),
                 "attention_backend": (list(ATTENTION_BACKENDS), ui("注意力机制", "继续使用插件私有后端的 auto/flash/SDPA 选择。")),
                 "reload_model": ("BOOLEAN", ui("重新加载模型", "忽略插件模型缓存。", default=False)),
-            },
-            "optional": {
-                "hf_model_path": ("STRING", ui("HF 模型路径", "可连接下载节点；必须位于 models/SenseNova。", default="")),
-            },
+            }
         }
 
     RETURN_TYPES = ("MODEL", "VAE", "STRING")
@@ -505,19 +500,19 @@ class ComfyEasySenseNovaLoader:
     CATEGORY = NATIVE_CATEGORY
     DESCRIPTION = "以 ComfyUI MODEL 形式加载 SenseNova；保留本地 tokenizer、原模型代码与私有 Transformers 4.57.1 补丁。"
 
-    def load(self, checkpoint_name, hf_model_name, storage_precision, attention_backend, reload_model, hf_model_path=""):
-        checkpoint = None
-        if checkpoint_name == "<使用 HF 模型目录>":
-            model_path = resolve_model_path(hf_model_name, hf_model_path)
-        else:
-            checkpoint = Path(folder_paths.get_full_path_or_raise("checkpoints", checkpoint_name))
-            with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
-                checkpoint_metadata = handle.metadata() or {}
-            if checkpoint_metadata.get("comfyui_model_family") != "sensenova_u1":
-                raise ValueError(
-                    "所选 safetensors 不是 SenseNova 转换 checkpoint（缺少 comfyui_model_family=sensenova_u1）。"
-                )
-            model_path = checkpoint_assets_path(checkpoint, checkpoint_metadata)
+    def load(self, checkpoint_name, storage_precision, attention_backend, reload_model):
+        if checkpoint_name == "<未找到 SenseNova checkpoint>":
+            raise FileNotFoundError(
+                "models/checkpoints 中没有由 convert_hf_to_comfy_checkpoint.py 生成的 SenseNova checkpoint。"
+            )
+        checkpoint = Path(folder_paths.get_full_path_or_raise("checkpoints", checkpoint_name))
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+            checkpoint_metadata = handle.metadata() or {}
+        if checkpoint_metadata.get("comfyui_model_family") != "sensenova_u1":
+            raise ValueError(
+                "所选 safetensors 不是 SenseNova 转换 checkpoint（缺少 comfyui_model_family=sensenova_u1）。"
+            )
+        model_path = checkpoint_assets_path(checkpoint, checkpoint_metadata)
 
         handle = load_handle(
             str(model_path),
@@ -535,7 +530,7 @@ class ComfyEasySenseNovaLoader:
         info = {
             **handle.info,
             "interface": "ComfyUI MODEL/CONDITIONING",
-            "checkpoint": str(checkpoint) if checkpoint else None,
+            "checkpoint": str(checkpoint),
             "assets": str(model_path),
             "pixel_space_vae": True,
             "transformers_isolation": "transformers_4571",
