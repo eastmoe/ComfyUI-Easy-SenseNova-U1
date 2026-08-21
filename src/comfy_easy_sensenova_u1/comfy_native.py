@@ -305,7 +305,17 @@ class SenseNovaComfyModel(comfy.model_base.BaseModel):
             raise ValueError("SenseNova MODEL requires conditioning from SenseNova Conditioning.")
         return {"sensenova_condition": SenseNovaCondition(spec)}
 
-    def _apply_model(self, x, sigma, sensenova_condition=None, **kwargs):
+    def _apply_model(
+        self,
+        x,
+        sigma,
+        c_concat=None,
+        c_crossattn=None,
+        control=None,
+        transformer_options={},
+        sensenova_condition=None,
+        **kwargs,
+    ):
         if not isinstance(sensenova_condition, SenseNovaBranchSpec):
             raise TypeError("Missing SenseNova branch condition")
         bundle = sensenova_condition.bundle
