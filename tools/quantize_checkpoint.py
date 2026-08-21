@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quantize SenseNova Linear weights into a loadable ComfyUI checkpoint.
+"""Convert or quantize SenseNova Linear weights into a loadable ComfyUI checkpoint.
 
 The model architecture is always created through this plugin's private patched
 Transformers 4.57.1.  Inputs may be a Hugging Face repo id, a local HF snapshot,
@@ -37,7 +37,14 @@ COMFY_ROOT = PLUGIN_ROOT.parent.parent
 PLUGIN_SRC = PLUGIN_ROOT / "src"
 PINNED_TRANSFORMERS = "4.57.1+SenseNova-patch"
 PIXEL_VAE_KEY = "vae.pixel_space_vae"
-QUANT_METHODS = ("int8_convrot", "mxfp8", "w4a8_convrot", "mxfp4")
+QUANT_METHODS = (
+    "bf16",
+    "int8_convrot",
+    "mxfp8",
+    "w4a8_convrot",
+    "mxfp4",
+    "nvfp4",
+)
 
 
 @dataclass(frozen=True)
@@ -205,6 +212,16 @@ def select_linear_weights(
 
 
 def quantize_weight(weight: torch.Tensor, method: str) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
+    if method == "bf16":
+        return {"weight": weight.to(torch.bfloat16)}, {"format": "bf16"}
+
+    # comfy-kitchen's CUDA NVFP4 quantizer accepts FP16/BF16 only. Some
+    # SenseNova checkpoints store a substantial subset of Linear weights as
+    # FP32, so narrow those inputs before invoking the kernel. NVFP4's 4-bit
+    # payload cannot retain the additional FP32 mantissa precision anyway.
+    if method == "nvfp4" and weight.dtype == torch.float32:
+        weight = weight.to(torch.bfloat16)
+
     if method != "mxfp4":
         from comfy.quant_ops import QuantizedTensor
 
@@ -226,6 +243,16 @@ def quantize_weight(weight: torch.Tensor, method: str) -> tuple[dict[str, torch.
             return (
                 {"weight": quantized._qdata, "weight_scale": quantized._params.scale},
                 {"format": "mxfp8"},
+            )
+        if method == "nvfp4":
+            quantized = QuantizedTensor.from_float(weight, "TensorCoreNVFP4Layout")
+            return (
+                {
+                    "weight": quantized._qdata,
+                    "weight_scale": quantized._params.block_scale,
+                    "weight_scale_2": quantized._params.scale,
+                },
+                {"format": "nvfp4"},
             )
         if method == "w4a8_convrot":
             quantized = QuantizedTensor.from_float(
@@ -301,11 +328,16 @@ def tensor_dtype_name(tensor: torch.Tensor) -> str:
 
 def spool_tensor(spool: BinaryIO, path: Path, name: str, tensor: torch.Tensor) -> OutputTensor:
     value = tensor.detach().contiguous().cpu()
+    shape = tuple(value.shape)
     offset = spool.tell()
-    raw = value.view(torch.uint8).numpy()
+    # Viewing a 0-D scalar as a dtype with a different element size is rejected
+    # by PyTorch. NVFP4's per-tensor weight_scale_2 is such an FP32 scalar, so
+    # flatten only the temporary byte view while retaining the original shape
+    # in the safetensors header.
+    raw = value.reshape(-1).view(torch.uint8).numpy()
     spool.write(memoryview(raw).cast("B"))
     size = spool.tell() - offset
-    output = OutputTensor(name, tensor_dtype_name(value), tuple(value.shape), path, offset, size)
+    output = OutputTensor(name, tensor_dtype_name(value), shape, path, offset, size)
     del value, raw
     return output
 
@@ -342,20 +374,28 @@ def quantize_to_spool(
                             )
                         )
                         continue
-                    weight = handle.get_tensor(source.name).to(device)
+                    weight = handle.get_tensor(source.name)
+                    # BF16 conversion is a CPU-only byte transformation. NVFP4
+                    # also narrows FP32 on CPU before the accelerator transfer,
+                    # avoiding an unnecessary full-size FP32 GPU allocation.
+                    if method in {"bf16", "nvfp4"} and weight.dtype == torch.float32:
+                        weight = weight.to(torch.bfloat16)
+                    if method != "bf16":
+                        weight = weight.to(device)
                     quantized, config = quantize_weight(weight, method)
                     prefix = f"{layer}."
                     for suffix, value in quantized.items():
                         outputs.append(spool_tensor(spool, spool_path, prefix + suffix, value))
-                    config_bytes = json.dumps(config, separators=(",", ":")).encode("utf-8")
-                    outputs.append(
-                        spool_tensor(
-                            spool,
-                            spool_path,
-                            prefix + "comfy_quant",
-                            torch.tensor(list(config_bytes), dtype=torch.uint8),
+                    if method != "bf16":
+                        config_bytes = json.dumps(config, separators=(",", ":")).encode("utf-8")
+                        outputs.append(
+                            spool_tensor(
+                                spool,
+                                spool_path,
+                                prefix + "comfy_quant",
+                                torch.tensor(list(config_bytes), dtype=torch.uint8),
+                            )
                         )
-                    )
                     layer_configs[layer] = config
                     completed += 1
                     del weight, quantized, value
@@ -419,13 +459,23 @@ def validate_checkpoint(path: Path, expected_method: str, expected_layers: int) 
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = handle.metadata() or {}
         keys = set(handle.keys())
-    if metadata.get("sensenova_quantization") != expected_method:
+    if expected_method == "bf16":
+        if metadata.get("sensenova_quantization") is not None:
+            raise ValueError("BF16 conversion output must not be marked as quantized")
+        if metadata.get("sensenova_linear_conversion") != "fp32_to_bf16":
+            raise ValueError("Output BF16 conversion metadata is invalid")
+        if metadata.get("sensenova_converted_linear_count") != str(expected_layers):
+            raise ValueError("Output BF16 converted Linear count is invalid")
+    elif metadata.get("sensenova_quantization") != expected_method:
         raise ValueError("Output quantization metadata is invalid")
     if metadata.get(ASSETS_FORMAT_KEY) != ASSETS_FORMAT:
         raise ValueError("Output does not contain valid embedded checkpoint assets metadata")
     found = sum(key.endswith(".comfy_quant") for key in keys)
-    if found != expected_layers:
-        raise ValueError(f"Expected {expected_layers} quantized layers, found {found}")
+    expected_descriptors = 0 if expected_method == "bf16" else expected_layers
+    if found != expected_descriptors:
+        raise ValueError(
+            f"Expected {expected_descriptors} quantized layers, found {found}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -435,7 +485,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--method", choices=QUANT_METHODS, required=True)
     parser.add_argument("--revision", default="", help="Hugging Face revision")
     parser.add_argument("--token", default="", help="Hugging Face access token")
-    parser.add_argument("--device", default="cuda", help="Quantization device, normally cuda or cuda:N")
+    parser.add_argument(
+        "--device",
+        default="cuda",
+        help="Quantization device, normally cuda or cuda:N; bf16 conversion always runs on CPU",
+    )
     parser.add_argument("--include", help="Only quantize Linear module names matching this regex")
     parser.add_argument("--exclude", action="append", default=[], help="Keep matching Linear modules in source precision; repeatable")
     parser.add_argument("--dry-run", action="store_true", help="Resolve source and list the quantization plan without reading weights")
@@ -468,18 +522,42 @@ def main() -> int:
         re.compile(args.include) if args.include else None,
         tuple(re.compile(value) for value in args.exclude),
     )
+    if args.method == "bf16":
+        source_by_name = {tensor.name: tensor for tensor in tensors}
+        selected = {
+            name: layer
+            for name, layer in selected.items()
+            if source_by_name[name].dtype == "F32"
+        }
+        if not selected:
+            raise ValueError("No FP32 Linear weights matched the checkpoint and filters")
     source_bytes = sum(tensor.size for tensor in tensors)
     print(f"source: {source.label}")
     print(f"private transformers: {transformers_version} ({PINNED_TRANSFORMERS})")
     print(f"checkpoint tensors: {len(tensors)}, size: {source_bytes / 2**30:.2f} GiB")
     print(f"Linear modules selected: {len(selected)}/{len(linear_names)}")
+    if args.method == "bf16":
+        print(
+            f"BF16 conversion: {len(selected)} FP32 Linear weights will be converted; "
+            "existing BF16 and non-Linear tensors will be copied unchanged"
+        )
+    if args.method == "nvfp4":
+        source_by_name = {tensor.name: tensor for tensor in tensors}
+        fp32_count = sum(
+            source_by_name[name].dtype == "F32" for name in selected
+        )
+        if fp32_count:
+            print(
+                f"NVFP4 input conversion: {fp32_count} FP32 Linear weights "
+                "will be converted to BF16 before quantization"
+            )
     if args.dry_run:
         for name in selected.values():
             print(name)
         return 0
 
     device = torch.device(args.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
+    if args.method != "bf16" and device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available; pass --device cpu only for formats supported on CPU")
     output.parent.mkdir(parents=True, exist_ok=True)
     spool_fd, spool_name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".quant-spool", dir=output.parent)
@@ -490,6 +568,21 @@ def main() -> int:
         if PIXEL_VAE_KEY not in {tensor.name for tensor in outputs}:
             with spool_path.open("ab") as spool:
                 outputs.append(spool_tensor(spool, spool_path, PIXEL_VAE_KEY, torch.tensor(1.0)))
+        processing_metadata = (
+            {
+                "sensenova_linear_conversion": "fp32_to_bf16",
+                "sensenova_converted_linear_count": str(len(layer_configs)),
+            }
+            if args.method == "bf16"
+            else {
+                "sensenova_quantization": args.method,
+                "sensenova_quantized_linear_count": str(len(layer_configs)),
+                "_quantization_metadata": json.dumps(
+                    {"format_version": "1.0", "layers": layer_configs},
+                    separators=(",", ":"),
+                ),
+            }
+        )
         metadata = {
             **source_metadata,
             "format": "pt",
@@ -498,12 +591,7 @@ def main() -> int:
             "sensenova_transformers": PINNED_TRANSFORMERS,
             "sensenova_source": source.label,
             "sensenova_pixel_space_vae": "true",
-            "sensenova_quantization": args.method,
-            "sensenova_quantized_linear_count": str(len(layer_configs)),
-            "_quantization_metadata": json.dumps(
-                {"format_version": "1.0", "layers": layer_configs},
-                separators=(",", ":"),
-            ),
+            **processing_metadata,
             **build_assets_metadata(source.assets),
         }
         write_checkpoint(output, outputs, metadata)
@@ -513,7 +601,8 @@ def main() -> int:
 
     print(f"checkpoint: {output}")
     print("assets:     embedded in checkpoint")
-    print(f"quantized Linear layers: {len(layer_configs)} ({args.method})")
+    action = "converted" if args.method == "bf16" else "quantized"
+    print(f"{action} Linear layers: {len(layer_configs)} ({args.method})")
     return 0
 
 

@@ -13,7 +13,13 @@ import comfy.ops
 from comfy.quant_ops import QuantizedTensor, get_layout_class
 
 
-SUPPORTED_METHODS = ("int8_convrot", "mxfp8", "w4a8_convrot", "mxfp4")
+SUPPORTED_METHODS = (
+    "int8_convrot",
+    "mxfp8",
+    "w4a8_convrot",
+    "mxfp4",
+    "nvfp4",
+)
 
 
 def checkpoint_quantization(model_path: str | Path) -> str | None:
@@ -88,6 +94,7 @@ class BufferedQuantLinear(torch.nn.Module):
         self.config = config
         self.register_buffer("qdata", None)
         self.register_buffer("scale", None)
+        self.register_buffer("scale_2", None)
         self.register_buffer("s_channel", None)
         self.register_buffer("codebook", None)
         if bias:
@@ -122,6 +129,15 @@ class BufferedQuantLinear(torch.nn.Module):
                 "orig_shape": (self.out_features, self.in_features),
                 "transposed": False,
             }
+        elif quant_format == "nvfp4":
+            layout_name = "TensorCoreNVFP4Layout"
+            values = {
+                "scale": self.scale_2,
+                "block_scale": self.scale,
+                "orig_dtype": self.compute_dtype,
+                "orig_shape": (self.out_features, self.in_features),
+                "transposed": False,
+            }
         elif quant_format == "asym_w4a8_int8":
             layout_name = "AsymW4A8Int8Layout"
             values = {
@@ -139,15 +155,27 @@ class BufferedQuantLinear(torch.nn.Module):
             raise ValueError(f"Unsupported buffered quantization format: {quant_format}")
         params = get_layout_class(layout_name).Params(**values)
         weight = QuantizedTensor(self.qdata, layout_name, params)
-        if quant_format != "mxfp8":
+        if quant_format not in {"mxfp8", "nvfp4"}:
             return torch.nn.functional.linear(input_tensor, weight, self.bias)
 
         input_shape = input_tensor.shape
-        matrix = input_tensor.reshape(-1, input_shape[-1]) if input_tensor.ndim >= 3 else input_tensor
+        matrix = input_tensor.to(self.compute_dtype)
+        matrix = matrix.reshape(-1, input_shape[-1]) if matrix.ndim >= 3 else matrix
         if matrix.ndim != 2:
             return torch.nn.functional.linear(input_tensor, weight, self.bias)
-        quantized_input = QuantizedTensor.from_float(matrix, layout_name)
-        output = torch.nn.functional.linear(quantized_input, weight, self.bias)
+        use_quantized_input = quant_format == "mxfp8"
+        if quant_format == "nvfp4":
+            try:
+                import comfy.model_management as model_management
+
+                use_quantized_input = model_management.supports_nvfp4_compute(
+                    matrix.device
+                )
+            except Exception:
+                pass
+        if use_quantized_input:
+            matrix = QuantizedTensor.from_float(matrix, layout_name)
+        output = torch.nn.functional.linear(matrix, weight, self.bias)
         if input_tensor.ndim >= 3:
             output = output.reshape(*input_shape[:-1], self.out_features)
         return output
@@ -172,7 +200,11 @@ def _comfy_quant_linear(
     buffered: bool,
 ):
     config = _layer_config(handle, layer)
-    if buffered:
+    # NVFP4 needs an explicit capability gate: Comfy's generic Linear always
+    # quantizes activations, but swizzled NVFP4 activation tensors are invalid
+    # on CPU and unsupported GPUs. The buffered implementation keeps native
+    # NVFP4 matrix multiplication on Blackwell and cleanly dequantizes elsewhere.
+    if buffered or config["format"] == "nvfp4":
         module = BufferedQuantLinear(
             old.in_features,
             old.out_features,
@@ -188,6 +220,9 @@ def _comfy_quant_linear(
             f"{layer}.{scale_name}",
             f"{layer}.comfy_quant",
         }
+        if config["format"] == "nvfp4":
+            module.scale_2 = handle.get_tensor(f"{layer}.weight_scale_2")
+            consumed.add(f"{layer}.weight_scale_2")
         if config["format"] == "asym_w4a8_int8":
             module.s_channel = handle.get_tensor(f"{layer}.weight_s_channel")
             module.codebook = handle.get_tensor(f"{layer}.weight_codebook")
@@ -213,6 +248,7 @@ def _comfy_quant_linear(
     keys = {
         "weight",
         "weight_scale",
+        "weight_scale_2",
         "weight_s_rel",
         "weight_s_channel",
         "weight_codebook",

@@ -23,9 +23,14 @@ from .quantized_checkpoint import SUPPORTED_METHODS, checkpoint_quantization
 MODEL_TYPE = "EASY_SENSENOVA_U1_MODEL"
 DEFAULT_SEED = 42
 GRID_SIZE = 32
-MX_STORAGE_PRECISIONS = ("mxfp8", "mxfp4")
+QUANTIZED_STORAGE_PRECISIONS = ("mxfp8", "mxfp4", "nvfp4")
 PREQUANT_STORAGE_PRECISIONS = SUPPORTED_METHODS
-STORAGE_PRECISIONS = ("bfloat16", "float16", "float32", *MX_STORAGE_PRECISIONS)
+STORAGE_PRECISIONS = (
+    "bfloat16",
+    "float16",
+    "float32",
+    *QUANTIZED_STORAGE_PRECISIONS,
+)
 COMPUTE_PRECISIONS = ("auto", "bfloat16", "float16", "float32")
 ATTENTION_BACKENDS = ("auto", "flash", "sdpa")
 VRAM_MODES = ("full", "balanced", "low")
@@ -227,30 +232,33 @@ def load_handle(
             if clear_memory_before_load:
                 _clear_memory()
             sensenova_u1.set_attn_backend(attention_backend)
-            dynamic_mx_precision = (
+            dynamic_quant_precision = (
                 storage_precision
-                if not prequantized and storage_precision in MX_STORAGE_PRECISIONS
+                if not prequantized
+                and storage_precision in QUANTIZED_STORAGE_PRECISIONS
                 else None
             )
-            mx_compute_precision = (
+            quant_compute_precision = (
                 "bfloat16" if compute_precision == "auto" else compute_precision
             )
             model, tokenizer = load_model_and_tokenizer(
                 model_path,
                 dtype=(
-                    dtype_from_name(mx_compute_precision)
+                    dtype_from_name(quant_compute_precision)
                     if prequantized
                     else torch.bfloat16
-                    if dynamic_mx_precision
+                    if dynamic_quant_precision
                     else dtype_from_name(storage_precision)
                 ),
                 device=resolved_device,
                 device_map=normalized_map,
                 max_memory=max_memory.strip() or None,
                 for_offload=prefetch_count > 0,
-                dynamic_mx_precision=dynamic_mx_precision,
-                mx_compute_dtype=(
-                    dtype_from_name(mx_compute_precision) if dynamic_mx_precision else None
+                dynamic_quant_precision=dynamic_quant_precision,
+                quant_compute_dtype=(
+                    dtype_from_name(quant_compute_precision)
+                    if dynamic_quant_precision
+                    else None
                 ),
             )
             input_device = str(infer_input_device(model, fallback=resolved_device))

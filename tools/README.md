@@ -40,18 +40,24 @@ ComfyUI/venv/bin/python tools/quantize_checkpoint.py \
   --method mxfp8
 ```
 
-`--method` accepts `int8_convrot`, `mxfp8`, `w4a8_convrot`, and `mxfp4`.
+`--method` accepts `bf16`, `int8_convrot`, `mxfp8`, `w4a8_convrot`, `mxfp4`,
+and `nvfp4`. `bf16` converts only FP32 Linear weights to BF16; existing BF16
+Linear weights and every non-Linear tensor are copied byte-for-byte. Its output
+remains a regular floating-point checkpoint without prequantization metadata.
+The conversion runs on CPU and ignores `--device`.
 Only weights belonging to actual `torch.nn.Linear` modules are quantized;
 embeddings, norms, convolutions, biases, and other tensors stay in their source
 precision. Use `--dry-run` to verify the source, private Transformers version,
 and selected layers before processing a large checkpoint. `--include` and
 repeatable `--exclude` accept regular expressions for controlled experiments.
 
-The first three formats use the ComfyUI/comfy-kitchen quantization ABI. MXFP4
-uses TorchAO and requires a PyTorch-compatible `torchao>=0.16`. Quantization is
-streamed one source tensor at a time, but it still needs enough accelerator
-memory for the largest individual Linear weight and temporary disk space for
-the quantized payload. The output embeds the same compressed assets in its
-single checkpoint file and is loaded by the same SenseNova Loader, which
-continues to construct the model via the plugin's private patched Transformers
-4.57.1.
+`int8_convrot`, `mxfp8`, `w4a8_convrot`, and `nvfp4` use the
+ComfyUI/comfy-kitchen quantization ABI. Before the CUDA quantizer runs, NVFP4
+temporarily converts FP32 Linear sources to BF16 because the CUDA kernel accepts
+FP16/BF16 inputs. MXFP4 uses TorchAO and requires a PyTorch-compatible
+`torchao>=0.16`. Quantization is streamed one source tensor at a time, but it
+still needs enough accelerator memory for the largest individual Linear weight
+and temporary disk space for the quantized payload.
+The output embeds the same compressed assets in its single checkpoint file and
+is loaded by the same SenseNova Loader, which continues to construct the model
+via the plugin's private patched Transformers 4.57.1.

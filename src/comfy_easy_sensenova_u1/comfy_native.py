@@ -29,6 +29,7 @@ import comfy.supported_models_base
 from .runtime import SenseNovaHandle, comfy_to_pil_batch
 from .checkpoint_assets import materialize_checkpoint_assets
 from .paths import comfy_root
+from .progress import ThinkingInferenceProgress
 
 
 IMG_START_TOKEN = "<img>"
@@ -151,14 +152,20 @@ def _prepare_text_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaCondit
         )
         positive_cache = outputs.past_key_values
         t_index = indexes[0].max().item()
-        positive_cache, t_index, bundle.think_text = model._generate_think(
-            tokenizer,
-            outputs,
-            positive_cache,
-            t_index,
-            IMG_START_TOKEN,
-            max_think_tokens=bundle.max_think_tokens,
-        )
+        with ThinkingInferenceProgress(
+            model,
+            bundle.max_think_tokens,
+            "SenseNova Native 文生图思考",
+            "token",
+        ):
+            positive_cache, t_index, bundle.think_text = model._generate_think(
+                tokenizer,
+                outputs,
+                positive_cache,
+                t_index,
+                IMG_START_TOKEN,
+                max_think_tokens=bundle.max_think_tokens,
+            )
         positive_indexes = model._build_t2i_image_indexes(token_h, token_w, t_index + 1, device=ids.device)
     else:
         positive_cache, _ = model._t2i_prefix_forward(ids, indexes, mask)
@@ -244,14 +251,20 @@ def _prepare_edit_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaCondit
             )
             cache = outputs.past_key_values
             t_index = indexes[0].max().item()
-            cache, t_index, bundle.think_text = model._generate_think(
-                tokenizer,
-                outputs,
-                cache,
-                t_index,
-                IMG_START_TOKEN,
-                max_think_tokens=bundle.max_think_tokens,
-            )
+            with ThinkingInferenceProgress(
+                model,
+                bundle.max_think_tokens,
+                "SenseNova Native 图像编辑思考",
+                "token",
+            ):
+                cache, t_index, bundle.think_text = model._generate_think(
+                    tokenizer,
+                    outputs,
+                    cache,
+                    t_index,
+                    IMG_START_TOKEN,
+                    max_think_tokens=bundle.max_think_tokens,
+                )
             image_indexes = model._build_t2i_image_indexes(
                 token_h, token_w, t_index + 1, device=embeds.device
             )

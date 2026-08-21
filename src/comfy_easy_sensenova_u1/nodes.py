@@ -164,8 +164,8 @@ class ComfyEasySenseNovaLoadModel:
             "required": {
                 "model_name": (choices, ui("本地模型", "models/SenseNova 下检测到的模型子目录。")),
                 "device": (available_devices(), ui("设备", "单设备目标；auto 使用 ComfyUI 当前计算设备。")),
-                "storage_precision": (list(STORAGE_PRECISIONS), ui("存储精度", "浮点驻留精度，或将线性层权重边加载边压缩为 MXFP8/MXFP4。")),
-                "compute_precision": (list(COMPUTE_PRECISIONS), ui("计算精度", "推理计算类型；MX 权重会在前向时解量化到此精度，auto 对 MX 使用 bfloat16。")),
+                "storage_precision": (list(STORAGE_PRECISIONS), ui("存储精度", "浮点驻留精度，或将线性层权重边加载边压缩为 MXFP8/MXFP4/NVFP4。")),
+                "compute_precision": (list(COMPUTE_PRECISIONS), ui("计算精度", "量化权重会以所选精度计算；auto 使用 bfloat16。")),
                 "attention_backend": (list(ATTENTION_BACKENDS), ui("注意力机制", "auto 自动选择；flash 需要 flash-attn；sdpa 使用 PyTorch SDPA。")),
                 "vram_mode": (list(VRAM_MODES), ui("显存模式", "full 整模常驻；balanced 异步层预取；low 同步逐层卸载。")),
                 "device_map": (list(DEVICE_MAPS), ui("多卡映射", "none 为单设备；其余值使用 Accelerate 分片。不能与层卸载同时启用。")),
@@ -182,7 +182,7 @@ class ComfyEasySenseNovaLoadModel:
     RETURN_NAMES = ("SenseNova 模型", "模型信息")
     FUNCTION = "load"
     CATEGORY = CATEGORY
-    DESCRIPTION = "从 models/SenseNova 加载模型，支持浮点或 MXFP 动态量化存储、加载前显存清理、注意力、设备、多卡与低显存设置。"
+    DESCRIPTION = "从 models/SenseNova 加载模型，支持浮点、MXFP 或 NVFP4 动态量化存储、加载前显存清理、注意力、设备、多卡与低显存设置。"
     DEPRECATED = True
 
     def load(self, model_name, device, storage_precision, compute_precision, attention_backend, vram_mode, device_map, max_memory, reload_model, clear_memory_before_load=False, model_path=""):

@@ -13,7 +13,7 @@
 # ComfyUI 官方依赖未包含；SenseNova-U1 的 device_map 多卡加载需要。
 accelerate>=1,<2
 
-# MXFP8/MXFP4 动态加载及预量化 MXFP4 的可选依赖。TorchAO 与
+# MXFP8/MXFP4/NVFP4 动态加载及预量化 MXFP4 的可选依赖。TorchAO 与
 # PyTorch/CUDA 版本紧密配套，仅在使用对应路径时安装兼容的 torchao>=0.16。
 
 # flash-attn 是可选依赖；选择 flash 注意力机制时需安装与当前
