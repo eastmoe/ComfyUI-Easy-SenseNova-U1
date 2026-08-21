@@ -8,7 +8,18 @@ SenseNova-U1 的 ComfyUI 本地推理节点。节点位于右键菜单：
 
 `ComfyUI/models/SenseNova/<模型子文件夹>`
 
-## 节点
+## 原生 ComfyUI 节点
+
+- **SenseNova Loader**：输出标准 `MODEL` 和 HiDream-O1 同类的像素空间 `VAE`，同时保留插件内私有 `transformers_4571`、原始模型类与本地 tokenizer。
+- **SenseNova Conditioning**：输出正面、仅图像、无条件三个 `CONDITIONING`。图片为可选输入，Think Mode 在采样首次前向时建立原生 DynamicCache；目标宽高和批量从实际 latent 推导。
+- **SenseNova Sampling Patch**：设置原生 flow timestep shift、动态分辨率 noise scale、CFG 区间与 patch-space CFG 归一化。
+- **SenseNova Scheduler**：输出与原项目完全相同的时间步；推荐连接 Euler。标准 KSampler 的 `simple` scheduler 在常用 50 步时也可使用。
+- **SenseNova Dual Guider**：图像编辑时复现 `uncond + text_cfg*(positive-image) + image_cfg*(image-uncond)`，连接 `SamplerCustomAdvanced`。
+- **SenseNova Think Text**：在采样完成后读取 Think Mode 文本。
+
+空 latent 无需本插件重复实现：直接使用 ComfyUI 自带的 **空 HiDream-O1 潜空间图像**。解码使用 Loader 输出的像素空间 VAE。
+
+原来的六个一体化节点已标为 `Legacy`，节点 ID 保持不变，旧工作流可继续加载：
 
 - **SenseNova-U1 模型下载**：支持 Hugging Face、hf-mirror、并行文件下载、Xet 单文件连接数、自动断点续传、大小/SHA256 校验、指定 revision、访问令牌、关闭 TLS 校验和强制重新下载。每个仓库保存到 `models/SenseNova` 下独立的子文件夹；下载与校验进度同步到终端和 ComfyUI。
 - **SenseNova-U1 模型加载**：支持浮点权重存储精度、MXFP8/MXFP4 边加载边动态量化、加载前清理显存、推理计算精度、注意力机制、单设备、多卡 `device_map` 和低显存层卸载。
@@ -18,6 +29,18 @@ SenseNova-U1 的 ComfyUI 本地推理节点。节点位于右键菜单：
 - **SenseNova-U1 图文交错生成**：支持可选参考图批次、原生思考、多张图文交错输出及自由宽高。
 
 节点名、参数名、接口名、工具提示和源码关键注释均提供简体中文。
+
+## 转换 BF16 checkpoint
+
+```bash
+python tools/convert_hf_to_comfy_checkpoint.py \
+  ComfyUI/models/SenseNova/<HF模型目录> \
+  ComfyUI/models/checkpoints/SenseNova-U1.safetensors
+```
+
+转换器按 safetensors 字节区间流式合并 HF 分片，不把完整模型读入内存。输出包括单一权重文件及同名 `_assets` 目录；后者保存 tokenizer/config，并以链接引用权重文件。checkpoint 内加入 `vae.pixel_space_vae` 哨兵。移动或发布模型时必须同时保留 `_assets` 目录，因为 safetensors 不能替代 tokenizer、配置和插件运行代码。
+
+当前转换器只保证 BF16 数值路径，不执行量化。原生节点虽然输出标准 `MODEL` 并可进入 LoRA/ModelPatcher 链路，但主干模块仍由私有 Transformers 类构造；因此不能把任意 FP8、NVFP4 或 ConvRot checkpoint 当作已受支持。要支持这些格式，还需要逐层改用 `comfy.ops/quant_ops` 并分别做数值校验，而不只是改变 safetensors dtype。
 
 ## 安装
 

@@ -18,7 +18,7 @@
   },
   "nodes": {
     "ComfyEasySenseNovaDownloadModel": {
-      "display_name": "SenseNova-U1 模型下载",
+      "display_name": "SenseNova-U1 模型下载 (Legacy)",
       "inputs": {
         "model_preset": {"display_name": "模型预设", "tooltip": "选择官方模型；选择自定义后填写仓库 ID 和模型子文件夹。"},
         "repo_id": {"display_name": "仓库 ID", "tooltip": "仅自定义仓库时生效；选择官方预设时忽略。"},
@@ -39,7 +39,7 @@
       }
     },
     "ComfyEasySenseNovaLoadModel": {
-      "display_name": "SenseNova-U1 模型加载",
+      "display_name": "SenseNova-U1 模型加载 (Legacy)",
       "inputs": {
         "model_name": {"display_name": "本地模型", "tooltip": "models/SenseNova 下检测到的模型子目录。"},
         "model_path": {"display_name": "模型路径", "tooltip": "连接下载节点输出时优先使用该路径。"},
@@ -59,7 +59,7 @@
       }
     },
     "ComfyEasySenseNovaTextToImage": {
-      "display_name": "SenseNova-U1 文生图",
+      "display_name": "SenseNova-U1 文生图 (Legacy)",
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "prompt": {"display_name": "提示词"},
@@ -82,7 +82,7 @@
       }
     },
     "ComfyEasySenseNovaImageEdit": {
-      "display_name": "SenseNova-U1 图像编辑",
+      "display_name": "SenseNova-U1 图像编辑 (Legacy)",
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "image": {"display_name": "输入图像"},
@@ -109,7 +109,7 @@
       }
     },
     "ComfyEasySenseNovaVisionQA": {
-      "display_name": "SenseNova-U1 视觉问答",
+      "display_name": "SenseNova-U1 视觉问答 (Legacy)",
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "image": {"display_name": "输入图像"},
@@ -128,7 +128,7 @@
       }
     },
     "ComfyEasySenseNovaInterleave": {
-      "display_name": "SenseNova-U1 图文交错生成",
+      "display_name": "SenseNova-U1 图文交错生成 (Legacy)",
       "inputs": {
         "model": {"display_name": "SenseNova 模型"},
         "prompt": {"display_name": "提示词"},

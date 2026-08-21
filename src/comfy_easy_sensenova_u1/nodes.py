@@ -3,9 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any
 
 import torch
+from safetensors import SafetensorError, safe_open
+
+import comfy.model_management as mm
+import folder_paths
 
 from .download import FILE_VERIFICATIONS, OFFICIAL_REPOS, download_snapshot
 from .paths import available_models, resolve_model_path
@@ -34,9 +39,20 @@ from .runtime import (
     target_size_for_edit,
     validate_size,
 )
+from .comfy_native import (
+    SenseNovaComfyModel,
+    SenseNovaConditionBundle,
+    checkpoint_assets_path,
+    conditioning_from_prompt,
+    make_dual_guider,
+    make_model_patcher,
+    make_pixel_vae,
+    patch_sampling,
+)
 
 
 CATEGORY = "eastmoe/Comfy-Easy-SenseNova-U1"
+NATIVE_CATEGORY = f"{CATEGORY}/native"
 
 
 def ui(display_name: str, tooltip: str, **kwargs: Any) -> dict[str, Any]:
@@ -91,6 +107,7 @@ class ComfyEasySenseNovaDownloadModel:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
     DESCRIPTION = "将 SenseNova-U1 模型下载到 ComfyUI/models/SenseNova 的不同子文件夹；显示进度并支持停止与续传。"
+    DEPRECATED = True
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -165,6 +182,7 @@ class ComfyEasySenseNovaLoadModel:
     FUNCTION = "load"
     CATEGORY = CATEGORY
     DESCRIPTION = "从 models/SenseNova 加载模型，支持浮点或 MXFP 动态量化存储、加载前显存清理、注意力、设备、多卡与低显存设置。"
+    DEPRECATED = True
 
     def load(self, model_name, device, storage_precision, compute_precision, attention_backend, vram_mode, device_map, max_memory, reload_model, clear_memory_before_load=False, model_path=""):
         resolved = resolve_model_path(model_name, model_path)
@@ -205,6 +223,7 @@ class ComfyEasySenseNovaTextToImage:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
     DESCRIPTION = "使用 SenseNova-U1 执行文生图，支持普通模式、思考模式、tqdm 进度与停止。"
+    DEPRECATED = True
 
     def generate(self, model: SenseNovaHandle, prompt, width, height, cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
         if not prompt.strip():
@@ -263,6 +282,7 @@ class ComfyEasySenseNovaImageEdit:
     FUNCTION = "edit"
     CATEGORY = CATEGORY
     DESCRIPTION = "SenseNova-U1 图像编辑，可把 IMAGE 批次作为多张参考图，并显示可停止的采样进度。"
+    DEPRECATED = True
 
     def edit(self, model: SenseNovaHandle, image: torch.Tensor, prompt, auto_size, width, height, target_megapixels, cfg_scale, img_cfg_scale, cfg_norm, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, seed, think_mode, batch_size):
         if not prompt.strip():
@@ -324,6 +344,7 @@ class ComfyEasySenseNovaVisionQA:
     FUNCTION = "answer"
     CATEGORY = CATEGORY
     DESCRIPTION = "SenseNova-U1 视觉理解与视觉问答，图像批次会逐张回答，并显示可停止的 token 进度。"
+    DEPRECATED = True
 
     def answer(self, model: SenseNovaHandle, image: torch.Tensor, question, max_new_tokens, do_sample, temperature, top_p, top_k, repetition_penalty):
         if not question.strip():
@@ -399,6 +420,7 @@ class ComfyEasySenseNovaInterleave:
     FUNCTION = "generate"
     CATEGORY = CATEGORY
     DESCRIPTION = "SenseNova-U1 原生图文交错生成，输出文本中的 <image> 与图像批次按顺序对应；显示可停止的采样进度。"
+    DEPRECATED = True
 
     def generate(self, model: SenseNovaHandle, prompt, width, height, system_message, cfg_scale, img_cfg_scale, timestep_shift, cfg_interval_start, cfg_interval_end, num_steps, max_images, seed, think_mode, image=None):
         if not prompt.strip():
@@ -439,6 +461,208 @@ class ComfyEasySenseNovaInterleave:
         return output, text, metadata(model, "interleave", width=width, height=height, seed=seed, input_images=len(input_images), output_images=len(generated), steps=num_steps)
 
 
+def _native_checkpoint_choices() -> list[str]:
+    choices = []
+    for name in folder_paths.get_filename_list("checkpoints"):
+        path = name.replace("\\", "/")
+        if not path.lower().endswith((".safetensors", ".sft")) or any(
+            part.endswith("_assets") for part in path.split("/")[:-1]
+        ):
+            continue
+        try:
+            checkpoint = folder_paths.get_full_path_or_raise("checkpoints", name)
+            with safe_open(checkpoint, framework="pt", device="cpu") as handle:
+                metadata = handle.metadata() or {}
+        except (OSError, SafetensorError):
+            continue
+        if metadata.get("comfyui_model_family") == "sensenova_u1":
+            choices.append(name)
+    return ["<使用 HF 模型目录>", *choices]
+
+
+class ComfyEasySenseNovaLoader:
+    """Load SenseNova as a ComfyUI MODEL and a pixel-space VAE."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        hf_choices = available_models() or ["<未找到模型>"]
+        return {
+            "required": {
+                "checkpoint_name": (_native_checkpoint_choices(), ui("Checkpoint", "由 tools/convert_hf_to_comfy_checkpoint.py 生成的单文件权重；选择首项可直接使用原 HF 目录。")),
+                "hf_model_name": (hf_choices, ui("HF 模型目录", "checkpoint 选择“使用 HF 模型目录”时生效。")),
+                "storage_precision": (["bfloat16", "float16", "float32"], ui("加载精度", "BF16 checkpoint 推荐保持 bfloat16；此选项是加载时转换，不是量化。")),
+                "attention_backend": (list(ATTENTION_BACKENDS), ui("注意力机制", "继续使用插件私有后端的 auto/flash/SDPA 选择。")),
+                "reload_model": ("BOOLEAN", ui("重新加载模型", "忽略插件模型缓存。", default=False)),
+            },
+            "optional": {
+                "hf_model_path": ("STRING", ui("HF 模型路径", "可连接下载节点；必须位于 models/SenseNova。", default="")),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "VAE", "STRING")
+    RETURN_NAMES = ("MODEL", "像素空间 VAE", "模型信息")
+    FUNCTION = "load"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "以 ComfyUI MODEL 形式加载 SenseNova；保留本地 tokenizer、原模型代码与私有 Transformers 4.57.1 补丁。"
+
+    def load(self, checkpoint_name, hf_model_name, storage_precision, attention_backend, reload_model, hf_model_path=""):
+        checkpoint = None
+        if checkpoint_name == "<使用 HF 模型目录>":
+            model_path = resolve_model_path(hf_model_name, hf_model_path)
+        else:
+            checkpoint = Path(folder_paths.get_full_path_or_raise("checkpoints", checkpoint_name))
+            with safe_open(str(checkpoint), framework="pt", device="cpu") as handle:
+                checkpoint_metadata = handle.metadata() or {}
+            if checkpoint_metadata.get("comfyui_model_family") != "sensenova_u1":
+                raise ValueError(
+                    "所选 safetensors 不是 SenseNova 转换 checkpoint（缺少 comfyui_model_family=sensenova_u1）。"
+                )
+            model_path = checkpoint_assets_path(checkpoint, checkpoint_metadata)
+
+        handle = load_handle(
+            str(model_path),
+            str(mm.unet_offload_device()),
+            storage_precision,
+            "auto",
+            attention_backend,
+            "full",
+            "none",
+            "",
+            reload_model,
+            False,
+        )
+        patcher = make_model_patcher(handle)
+        info = {
+            **handle.info,
+            "interface": "ComfyUI MODEL/CONDITIONING",
+            "checkpoint": str(checkpoint) if checkpoint else None,
+            "assets": str(model_path),
+            "pixel_space_vae": True,
+            "transformers_isolation": "transformers_4571",
+        }
+        return patcher, make_pixel_vae(), json.dumps(info, ensure_ascii=False, indent=2)
+
+
+class ComfyEasySenseNovaConditioning:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", ui("SenseNova MODEL", "连接 SenseNova Loader；用于验证模型类型，本节点仍只做本地 tokenizer 条件描述。")),
+                "prompt": ("STRING", ui("提示词/编辑指令", "无图片时为文生图，有图片时为原生多图编辑。", multiline=True, default="")),
+                "think_mode": ("BOOLEAN", ui("思考模式", "采样首次前向时用私有 Transformers 生成思考并扩展 KV cache。", default=True)),
+                "max_think_tokens": ("INT", ui("最大思考 token", "思考模式的最大生成长度。", default=1024, min=1, max=8192, step=1)),
+            },
+            "optional": {
+                "image": ("IMAGE", ui("参考图像", "可选；批次中的图片作为多图参考，不经过像素 VAE。")),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "CONDITIONING", "CONDITIONING", "SENSENOVA_CONDITION_STATE")
+    RETURN_NAMES = ("正面条件", "仅图像条件", "无条件", "条件状态")
+    FUNCTION = "encode"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "构造不可拼接的 SenseNova KV 条件；尺寸和批量从实际像素 latent 自动推导，因此可直接复用空 HiDream-O1 潜空间图像。"
+
+    def encode(self, model, prompt, think_mode, max_think_tokens, image=None):
+        if not isinstance(model.model, SenseNovaComfyModel):
+            raise TypeError("SenseNova Conditioning 只能连接 SenseNova Loader 输出的 MODEL。")
+        if not prompt.strip():
+            raise ValueError("提示词不能为空。")
+        return conditioning_from_prompt(prompt, image, think_mode, max_think_tokens)
+
+
+class ComfyEasySenseNovaSamplingPatch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "timestep_shift": ("FLOAT", ui("时间步偏移", "原模型默认 3.0；可继续使用标准 Euler/KSampler。", default=3.0, min=0.01, max=100.0, step=0.01)),
+                "cfg_norm": (list(CFG_NORMS), ui("CFG 归一化", "在 SenseNova patch token 空间执行原生 global/channel/cfg_zero_star。")),
+                "cfg_interval_start": ("FLOAT", ui("CFG 起点", "以原生 t=0→1 表示。", default=0.0, min=0.0, max=1.0, step=0.01)),
+                "cfg_interval_end": ("FLOAT", ui("CFG 终点", "以原生 t=0→1 表示。", default=1.0, min=0.0, max=1.0, step=0.01)),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "patch"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "设置 SenseNova flow shift、动态分辨率噪声尺度、CFG 区间及原生 patch-space CFG 归一化。"
+
+    def patch(self, model, timestep_shift, cfg_norm, cfg_interval_start, cfg_interval_end):
+        if cfg_interval_start > cfg_interval_end:
+            raise ValueError("CFG 起点不能大于终点。")
+        return (patch_sampling(model, timestep_shift, cfg_norm, cfg_interval_start, cfg_interval_end),)
+
+
+class ComfyEasySenseNovaScheduler:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "steps": ("INT", ui("采样步数", "生成 steps+1 个精确 SenseNova sigma。", default=50, min=1, max=1000, step=1)),
+                "timestep_shift": ("FLOAT", ui("时间步偏移", "应与 Sampling Patch 保持一致。", default=3.0, min=0.01, max=100.0, step=0.01)),
+            }
+        }
+
+    RETURN_TYPES = ("SIGMAS",)
+    FUNCTION = "get_sigmas"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "生成与原项目 linspace(0,1) 加时间偏移完全一致的 sigma；推荐配合 Euler。"
+
+    def get_sigmas(self, steps, timestep_shift):
+        native_t = torch.linspace(0.0, 1.0, steps + 1, dtype=torch.float32)
+        sigma = 1.0 - native_t
+        sigma = timestep_shift * sigma / (1.0 + (timestep_shift - 1.0) * sigma)
+        return (sigma,)
+
+
+class ComfyEasySenseNovaDualGuider:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "positive": ("CONDITIONING",),
+                "image_condition": ("CONDITIONING",),
+                "negative": ("CONDITIONING",),
+                "text_cfg": ("FLOAT", ui("文本 CFG", "正面条件相对仅图像条件的引导。", default=4.0, min=0.0, max=100.0, step=0.1)),
+                "image_cfg": ("FLOAT", ui("图像 CFG", "仅图像条件相对无条件的引导。", default=1.0, min=0.0, max=100.0, step=0.1)),
+            }
+        }
+
+    RETURN_TYPES = ("GUIDER",)
+    FUNCTION = "get_guider"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "复现 SenseNova 编辑的三分支引导公式；连接 SamplerCustomAdvanced。"
+
+    def get_guider(self, model, positive, image_condition, negative, text_cfg, image_cfg):
+        if model.model_options.get("sensenova_guidance", {}).get("cfg_norm") == "cfg_zero_star":
+            raise ValueError("cfg_zero_star 是文生图引导；图像编辑请在 Sampling Patch 选择 none、global 或 channel。")
+        return (make_dual_guider(model, positive, image_condition, negative, text_cfg, image_cfg),)
+
+
+class ComfyEasySenseNovaThinkText:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": ("SENSENOVA_CONDITION_STATE",),
+                "samples": ("LATENT", ui("采样结果", "用于保证本节点在采样结束后执行。")),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "LATENT")
+    RETURN_NAMES = ("思考文本", "采样结果")
+    FUNCTION = "read"
+    CATEGORY = NATIVE_CATEGORY
+    OUTPUT_NODE = True
+
+    def read(self, state: SenseNovaConditionBundle, samples):
+        return state.think_text, samples
+
+
 NODE_CLASS_MAPPINGS = {
     "ComfyEasySenseNovaDownloadModel": ComfyEasySenseNovaDownloadModel,
     "ComfyEasySenseNovaLoadModel": ComfyEasySenseNovaLoadModel,
@@ -446,13 +670,25 @@ NODE_CLASS_MAPPINGS = {
     "ComfyEasySenseNovaImageEdit": ComfyEasySenseNovaImageEdit,
     "ComfyEasySenseNovaVisionQA": ComfyEasySenseNovaVisionQA,
     "ComfyEasySenseNovaInterleave": ComfyEasySenseNovaInterleave,
+    "ComfyEasySenseNovaLoader": ComfyEasySenseNovaLoader,
+    "ComfyEasySenseNovaConditioning": ComfyEasySenseNovaConditioning,
+    "ComfyEasySenseNovaSamplingPatch": ComfyEasySenseNovaSamplingPatch,
+    "ComfyEasySenseNovaScheduler": ComfyEasySenseNovaScheduler,
+    "ComfyEasySenseNovaDualGuider": ComfyEasySenseNovaDualGuider,
+    "ComfyEasySenseNovaThinkText": ComfyEasySenseNovaThinkText,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ComfyEasySenseNovaDownloadModel": "SenseNova-U1 模型下载",
-    "ComfyEasySenseNovaLoadModel": "SenseNova-U1 模型加载",
-    "ComfyEasySenseNovaTextToImage": "SenseNova-U1 文生图",
-    "ComfyEasySenseNovaImageEdit": "SenseNova-U1 图像编辑",
-    "ComfyEasySenseNovaVisionQA": "SenseNova-U1 视觉问答",
-    "ComfyEasySenseNovaInterleave": "SenseNova-U1 图文交错生成",
+    "ComfyEasySenseNovaDownloadModel": "SenseNova-U1 模型下载 (Legacy)",
+    "ComfyEasySenseNovaLoadModel": "SenseNova-U1 模型加载 (Legacy)",
+    "ComfyEasySenseNovaTextToImage": "SenseNova-U1 文生图 (Legacy)",
+    "ComfyEasySenseNovaImageEdit": "SenseNova-U1 图像编辑 (Legacy)",
+    "ComfyEasySenseNovaVisionQA": "SenseNova-U1 视觉问答 (Legacy)",
+    "ComfyEasySenseNovaInterleave": "SenseNova-U1 图文交错生成 (Legacy)",
+    "ComfyEasySenseNovaLoader": "SenseNova Loader",
+    "ComfyEasySenseNovaConditioning": "SenseNova Conditioning",
+    "ComfyEasySenseNovaSamplingPatch": "SenseNova Sampling Patch",
+    "ComfyEasySenseNovaScheduler": "SenseNova Scheduler",
+    "ComfyEasySenseNovaDualGuider": "SenseNova Dual Guider",
+    "ComfyEasySenseNovaThinkText": "SenseNova Think Text",
 }
