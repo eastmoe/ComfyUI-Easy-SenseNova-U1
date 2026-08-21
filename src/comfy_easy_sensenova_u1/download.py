@@ -19,6 +19,7 @@ from .progress import throw_if_interrupted
 DOWNLOAD_LOCK = threading.RLock()
 FILE_VERIFICATIONS = ("大小", "大小和 SHA256", "关闭")
 OFFICIAL_REPOS = {
+    "SenseNova-U1.5-8B-MoT": "sensenova/SenseNova-U1.5-8B-MoT",
     "SenseNova-U1.5-8B-MoT-Preview": "sensenova/SenseNova-U1.5-8B-MoT-Preview",
     "SenseNova-U1-8B-MoT": "sensenova/SenseNova-U1-8B-MoT",
     "SenseNova-U1-A3B-MoT": "sensenova/SenseNova-U1-A3B-MoT",
