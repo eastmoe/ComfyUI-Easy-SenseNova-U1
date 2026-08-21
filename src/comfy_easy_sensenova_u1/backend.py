@@ -13,6 +13,7 @@ import torch
 from packaging.version import InvalidVersion, Version
 
 from .paths import ensure_origin_source
+from .quantized_checkpoint import checkpoint_quantization, load_prequantized_model
 from .transformer_patch import PINNED_VERSION, load_transformers
 
 
@@ -101,10 +102,25 @@ def load_model_and_tokenizer(
     backend.check_checkpoint_compatibility(config)
     tokenizer = private_transformers.AutoTokenizer.from_pretrained(model_path)
 
-    model_kwargs: dict[str, Any] = {
-        "config": config,
-        "dtype": dtype,
-    }
+    prequantized = checkpoint_quantization(model_path)
+    model_kwargs: dict[str, Any] = {"config": config, "dtype": dtype}
+    if prequantized:
+        model, method, layer_count = load_prequantized_model(
+            private_transformers,
+            config,
+            model_path,
+            dtype=dtype,
+            device=device,
+            device_map=device_map,
+            for_offload=for_offload,
+        )
+        LOGGER.info(
+            "已通过私有 Transformers %s 加载 %s checkpoint（%d 个 Linear）。",
+            PINNED_VERSION,
+            method,
+            layer_count,
+        )
+        return model, tokenizer
     if dynamic_mx_precision:
         model_kwargs["quantization_config"] = _mx_quantization_config(
             private_transformers,

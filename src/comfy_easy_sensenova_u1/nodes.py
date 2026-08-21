@@ -487,8 +487,8 @@ class ComfyEasySenseNovaLoader:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "checkpoint_name": (_native_checkpoint_choices(), ui("Checkpoint", "选择由 tools/convert_hf_to_comfy_checkpoint.py 生成并放入 models/checkpoints 的 SenseNova 单文件权重。")),
-                "storage_precision": (["bfloat16", "float16", "float32"], ui("加载精度", "BF16 checkpoint 推荐保持 bfloat16；此选项是加载时转换，不是量化。")),
+                "checkpoint_name": (_native_checkpoint_choices(), ui("Checkpoint", "选择由转换或量化工具生成并放入 models/checkpoints 的 SenseNova 单文件权重。")),
+                "storage_precision": (["bfloat16", "float16", "float32"], ui("加载精度", "浮点 checkpoint 的加载精度；预量化 checkpoint 自动使用文件记录的量化格式。")),
                 "attention_backend": (list(ATTENTION_BACKENDS), ui("注意力机制", "继续使用插件私有后端的 auto/flash/SDPA 选择。")),
                 "vram_mode": (list(VRAM_MODES), ui("显存模式", "full 整模由 Comfy 托管；balanced/low 使用 SenseNova 原生逐层预取或卸载，适合 24GB 显卡。", default="balanced")),
                 "reload_model": ("BOOLEAN", ui("重新加载模型", "忽略插件模型缓存。", default=False)),

@@ -40,7 +40,16 @@ python tools/convert_hf_to_comfy_checkpoint.py \
 
 转换器按 safetensors 字节区间流式合并 HF 分片，不把完整模型读入内存。输出包括单一权重文件及同名 `_assets` 目录；后者保存 tokenizer/config，并以链接引用权重文件。checkpoint 内加入 `vae.pixel_space_vae` 哨兵。移动或发布模型时必须同时保留 `_assets` 目录，因为 safetensors 不能替代 tokenizer、配置和插件运行代码。
 
-当前转换器只保证 BF16 数值路径，不执行量化。原生节点虽然输出标准 `MODEL` 并可进入 LoRA/ModelPatcher 链路，但主干模块仍由私有 Transformers 类构造；因此不能把任意 FP8、NVFP4 或 ConvRot checkpoint 当作已受支持。要支持这些格式，还需要逐层改用 `comfy.ops/quant_ops` 并分别做数值校验，而不只是改变 safetensors dtype。
+转换器本身只做 BF16 无损重排。需要预量化 checkpoint 时，使用 `tools/quantize_checkpoint.py`，支持 `int8_convrot`、`mxfp8`、`w4a8_convrot` 和 `mxfp4`。脚本可读取 Hugging Face 仓库 ID、本地 HF 快照或已有的 safetensors checkpoint，只选择由私有模型结构确认的 `torch.nn.Linear` 权重；Embedding、Norm、卷积、bias 与其他张量保持原精度。输出仍是单一 checkpoint 加同名 `_assets`，Loader 会识别量化元数据并继续通过插件私有 Transformers 4.57.1 构造模型。
+
+```bash
+ComfyUI/venv/bin/python tools/quantize_checkpoint.py \
+  sensenova/SenseNova-U1.5-8B-MoT \
+  ComfyUI/models/checkpoints/SenseNova-U1.5-w4a8.safetensors \
+  --method w4a8_convrot
+```
+
+建议先附加 `--dry-run` 检查模型来源、私有 Transformers 版本和 Linear 数量。前三种格式使用 ComfyUI/comfy-kitchen 的量化布局；MXFP4 需要与当前 PyTorch 匹配的 `torchao>=0.16`。量化逐个权重处理，不会把完整 checkpoint 放入内存，但仍需容纳最大单个 Linear 的设备内存和量化 payload 的临时磁盘空间。
 
 原生逐层卸载模式不能应用 Comfy LoRA 权重补丁；需要 LoRA 时选择 `full`。这是因为原始 Transformers 线性层尚未改造成 `comfy.ops`，不能同时由 SenseNova 层卸载器和 Comfy 权重补丁器管理。
 
@@ -54,7 +63,7 @@ pip install -r requirements.txt
 
 重启 ComfyUI。若使用 `flash` 注意力机制，还需单独安装与当前 Python、PyTorch、CUDA 匹配的 `flash-attn` wheel；否则使用 `auto` 或 `sdpa`。Transformers `4.57.1` 源码快照随插件放在 `transformer_patch/transformers_4571`。
 
-MXFP8/MXFP4 动态加载还需要安装与当前 PyTorch 版本匹配的 `torchao>=0.16`。读取线性层权重时会直接压缩，避免先建立完整 BF16 模型；存储精度与计算精度彼此独立，前向时权重按需解量化到所选 BF16、FP16 或 FP32，`auto` 使用 BF16。该权重存储路径不依赖 MX 专用矩阵乘内核，也不限制设备、显存模式或 `device_map`。
+MXFP8/MXFP4 动态加载还需要安装与当前 PyTorch 版本匹配的 `torchao>=0.16`。读取线性层权重时会直接压缩，避免先建立完整 BF16 模型；存储精度与计算精度彼此独立，前向时权重按需解量化到所选 BF16、FP16 或 FP32，`auto` 使用 BF16。预量化 checkpoint 的 `int8_convrot`、`mxfp8`、`w4a8_convrot` 使用 ComfyUI 原生量化算子；`balanced/low` 会以普通 qdata/scale 张量参与原生逐层卸载。预量化 checkpoint 暂不支持多卡 `device_map`。
 
 ## 兼容性
 

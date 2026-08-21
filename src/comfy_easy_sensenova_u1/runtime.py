@@ -17,12 +17,14 @@ from .backend import (
     load_model_and_tokenizer,
     runtime_report,
 )
+from .quantized_checkpoint import SUPPORTED_METHODS, checkpoint_quantization
 
 
 MODEL_TYPE = "EASY_SENSENOVA_U1_MODEL"
 DEFAULT_SEED = 42
 GRID_SIZE = 32
 MX_STORAGE_PRECISIONS = ("mxfp8", "mxfp4")
+PREQUANT_STORAGE_PRECISIONS = SUPPORTED_METHODS
 STORAGE_PRECISIONS = ("bfloat16", "float16", "float32", *MX_STORAGE_PRECISIONS)
 COMPUTE_PRECISIONS = ("auto", "bfloat16", "float16", "float32")
 ATTENTION_BACKENDS = ("auto", "flash", "sdpa")
@@ -143,8 +145,8 @@ class SenseNovaHandle:
         return make_offload_ctx(self.model, self.prefetch_count, self.device)
 
     def compute_context(self):
-        if self.storage_precision in MX_STORAGE_PRECISIONS:
-            # MX Linear 自己按 compute_precision 解量化计算，外层无需 autocast。
+        if self.storage_precision in PREQUANT_STORAGE_PRECISIONS:
+            # 预量化 Linear 自己执行量化计算或按 compute_precision 解量化。
             return nullcontext()
         precision = self.storage_precision if self.compute_precision == "auto" else self.compute_precision
         if precision == self.storage_precision:
@@ -201,6 +203,9 @@ def load_handle(
     from sensenova_u1.utils import infer_input_device, vram_mode_to_prefetch_count
 
     resolved_device = resolve_device(device)
+    prequantized = checkpoint_quantization(model_path)
+    if prequantized:
+        storage_precision = prequantized
     prefetch_count = vram_mode_to_prefetch_count(vram_mode)
     normalized_map = None if device_map == "none" else device_map
     if prefetch_count and normalized_map:
@@ -223,14 +228,22 @@ def load_handle(
                 _clear_memory()
             sensenova_u1.set_attn_backend(attention_backend)
             dynamic_mx_precision = (
-                storage_precision if storage_precision in MX_STORAGE_PRECISIONS else None
+                storage_precision
+                if not prequantized and storage_precision in MX_STORAGE_PRECISIONS
+                else None
             )
             mx_compute_precision = (
                 "bfloat16" if compute_precision == "auto" else compute_precision
             )
             model, tokenizer = load_model_and_tokenizer(
                 model_path,
-                dtype=torch.bfloat16 if dynamic_mx_precision else dtype_from_name(storage_precision),
+                dtype=(
+                    dtype_from_name(mx_compute_precision)
+                    if prequantized
+                    else torch.bfloat16
+                    if dynamic_mx_precision
+                    else dtype_from_name(storage_precision)
+                ),
                 device=resolved_device,
                 device_map=normalized_map,
                 max_memory=max_memory.strip() or None,
