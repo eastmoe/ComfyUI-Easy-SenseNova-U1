@@ -1,5 +1,18 @@
 # SenseNova checkpoint conversion
 
+Convert an official SenseNova LoRA to the generic key format recognized by
+ComfyUI's Load LoRA node:
+
+```bash
+python tools/convert_sensenova_lora_to_comfy.py \
+  /path/to/SenseNova-LoRA.safetensors \
+  /path/to/ComfyUI/models/loras/SenseNova/SenseNova-LoRA_comfy.safetensors
+```
+
+The converter only adds ComfyUI's `diffusion_model.` target prefix. Tensor
+bytes, shapes, dtypes, LoRA rank, alpha values, and source metadata are kept
+unchanged. Existing output files require `--overwrite`.
+
 Convert an original BF16 Hugging Face snapshot without loading its tensors into RAM:
 
 ```bash
