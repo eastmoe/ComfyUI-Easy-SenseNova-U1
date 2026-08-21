@@ -21,6 +21,7 @@ import comfy.model_base
 import comfy.model_management
 import comfy.model_patcher
 import comfy.model_sampling
+import comfy.patcher_extension
 import comfy.samplers
 import comfy.sd
 import comfy.supported_models_base
@@ -393,17 +394,74 @@ class SenseNovaCleanupWrapper:
         self.model.clear_conditioning_caches()
 
 
+class SenseNovaLayerOffloadPatcher(comfy.model_patcher.ModelPatcher):
+    """Leave raw Transformers weights under SenseNova's layer offloader.
+
+    Comfy's partial loader requires modules created with comfy.ops.  The pinned
+    Transformers implementation uses ordinary torch modules, so pretending it
+    supports Comfy partial loading strands arbitrary layers on CPU.
+    """
+
+    def model_size(self):
+        return 0
+
+    def partially_load(self, device_to, extra_memory=0, force_patch_weights=False):
+        if self.patches:
+            raise RuntimeError(
+                "SenseNova balanced/low 模式暂不支持 LoRA 权重补丁；请改用 full，或使用 Legacy Loader 的量化/卸载路径。"
+            )
+        self.patch_model(load_weights=False)
+        self.model.device = device_to
+        return 0
+
+    def partially_unload(self, device_to, memory_to_free=0, force_patch_weights=False):
+        return 0
+
+
+class SenseNovaOffloadSamplingWrapper:
+    def __init__(self, handle: SenseNovaHandle):
+        self.handle = handle
+
+    def __call__(self, executor, *args, **kwargs):
+        with self.handle.generation_context():
+            return executor(*args, **kwargs)
+
+
+def _force_full_prepare_sampling(executor, *args, **kwargs):
+    kwargs["force_full_load"] = True
+    return executor(*args, **kwargs)
+
+
 def make_model_patcher(handle: SenseNovaHandle):
     load_device = comfy.model_management.get_torch_device()
     offload_device = comfy.model_management.unet_offload_device()
     model = SenseNovaComfyModel(handle)
     model.device = offload_device
-    patcher = comfy.model_patcher.ModelPatcher(
+    patcher_class = (
+        SenseNovaLayerOffloadPatcher
+        if handle.prefetch_count > 0
+        else comfy.model_patcher.ModelPatcher
+    )
+    patcher = patcher_class(
         model,
         load_device=load_device,
         offload_device=offload_device,
     )
     patcher.set_model_unet_function_wrapper(SenseNovaCleanupWrapper(model))
+    if handle.prefetch_count > 0:
+        patcher.add_wrapper_with_key(
+            comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
+            "sensenova_layer_offload",
+            SenseNovaOffloadSamplingWrapper(handle),
+        )
+    else:
+        comfy.patcher_extension.add_wrapper_with_key(
+            comfy.patcher_extension.WrappersMP.PREPARE_SAMPLING,
+            "sensenova_force_full_load",
+            _force_full_prepare_sampling,
+            patcher.model_options,
+            is_model_options=True,
+        )
     return patcher
 
 
