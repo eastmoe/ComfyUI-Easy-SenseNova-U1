@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Convert a BF16 SenseNova Hugging Face snapshot to a ComfyUI checkpoint.
+"""Convert a BF16 SenseNova Hugging Face snapshot to one ComfyUI checkpoint.
 
-The output keeps the original Hugging Face tensor names so the plugin's pinned
-Transformers 4.57.1 implementation remains the authority for model creation.
-Alongside ``NAME.safetensors`` this tool creates ``NAME_assets/`` containing
-the tokenizer/config files and a hard link named ``model.safetensors``.  The
-hard link does not consume another copy of the model on filesystems that
-support it.  Keep the checkpoint and its assets directory together.
+The output keeps the original Hugging Face tensor names and embeds a compressed
+copy of the tokenizer/config assets in safetensors metadata.  The plugin's
+pinned Transformers 4.57.1 implementation remains the authority for model
+creation and materializes those assets in ComfyUI's temporary directory.
 
 No tensor is materialized: source safetensors byte ranges are copied directly,
 so conversion needs only a small amount of RAM even for very large models.
@@ -17,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import struct
 import sys
 import tempfile
@@ -25,10 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from checkpoint_assets import build_assets_metadata
+
 
 PINNED_TRANSFORMERS = "4.57.1+SenseNova-patch"
 PIXEL_VAE_KEY = "vae.pixel_space_vae"
-WEIGHT_SUFFIXES = {".safetensors", ".bin", ".pt", ".pth", ".ckpt"}
 
 
 @dataclass(frozen=True)
@@ -119,17 +117,17 @@ def collect_tensors(files: list[Path]) -> list[TensorSlice]:
     return tensors
 
 
-def build_header(tensors: list[TensorSlice], assets_name: str, source: Path) -> bytes:
+def build_header(tensors: list[TensorSlice], assets_metadata: dict[str, str], source: Path) -> bytes:
     offset = 0
     header: dict[str, object] = {
         "__metadata__": {
             "format": "pt",
             "comfyui_model_family": "sensenova_u1",
-            "sensenova_checkpoint_version": "1",
-            "sensenova_assets_dir": assets_name,
+            "sensenova_checkpoint_version": "3",
             "sensenova_transformers": PINNED_TRANSFORMERS,
             "sensenova_source": source.name,
             "sensenova_pixel_space_vae": "true",
+            **assets_metadata,
         }
     }
     for tensor in tensors:
@@ -159,8 +157,8 @@ def copy_range(source: Path, source_offset: int, length: int, output: BinaryIO) 
 def write_checkpoint(repo: Path, output: Path) -> None:
     files = source_files(repo)
     tensors = collect_tensors(files)
-    assets_name = f"{output.stem}_assets"
-    header = build_header(tensors, assets_name, repo)
+    assets_metadata = build_assets_metadata(repo)
+    header = build_header(tensors, assets_metadata, repo)
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
     try:
@@ -185,38 +183,11 @@ def write_checkpoint(repo: Path, output: Path) -> None:
         raise
 
 
-def copy_assets(repo: Path, output: Path) -> Path:
-    assets = output.with_name(f"{output.stem}_assets")
-    if assets.exists():
-        shutil.rmtree(assets)
-    assets.mkdir(parents=True)
-    for path in repo.iterdir():
-        if not path.is_file() or path.suffix.lower() in WEIGHT_SUFFIXES:
-            continue
-        if path.name.endswith(".safetensors.index.json"):
-            continue
-        shutil.copy2(path, assets / path.name)
-    if not (assets / "config.json").is_file():
-        raise FileNotFoundError(f"Missing config.json in {repo}")
-
-    model_link = assets / "model.safetensors"
-    relative = os.path.relpath(output, assets)
-    try:
-        model_link.symlink_to(relative)
-    except OSError:
-        try:
-            os.link(output, model_link)
-        except OSError:
-            shutil.copy2(output, model_link)
-            print("Warning: symlink/hard-link unavailable; assets contain a full checkpoint copy.", file=sys.stderr)
-    return assets
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="Original BF16 Hugging Face snapshot directory")
     parser.add_argument("output", type=Path, help="Output .safetensors, normally ComfyUI/models/checkpoints/NAME.safetensors")
-    parser.add_argument("--overwrite", action="store_true", help="Replace an existing checkpoint/assets directory")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing checkpoint")
     return parser.parse_args()
 
 
@@ -226,16 +197,14 @@ def main() -> int:
     output = args.output.expanduser().resolve()
     if output.suffix.lower() != ".safetensors":
         raise ValueError("Output filename must end in .safetensors")
-    assets = output.with_name(f"{output.stem}_assets")
-    if (output.exists() or assets.exists()) and not args.overwrite:
-        raise FileExistsError("Output or assets already exist; pass --overwrite to replace them")
+    if output.exists() and not args.overwrite:
+        raise FileExistsError("Output already exists; pass --overwrite to replace it")
     if not (source / "config.json").is_file():
         raise FileNotFoundError(f"Not a Hugging Face snapshot (missing config.json): {source}")
     write_checkpoint(source, output)
-    assets = copy_assets(source, output)
     print(f"Checkpoint: {output}")
-    print(f"Assets:     {assets}")
-    print("Load it with the SenseNova Loader node; keep both paths together.")
+    print("Assets:     embedded in checkpoint")
+    print("Load it with the SenseNova Loader node.")
     return 0
 
 

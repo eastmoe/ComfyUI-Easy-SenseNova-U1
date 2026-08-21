@@ -12,6 +12,7 @@ from safetensors import SafetensorError, safe_open
 import comfy.model_management as mm
 import folder_paths
 
+from .checkpoint_assets import ASSETS_FORMAT, ASSETS_FORMAT_KEY
 from .download import FILE_VERIFICATIONS, OFFICIAL_REPOS, download_snapshot
 from .paths import available_models, resolve_model_path
 from .progress import (
@@ -475,7 +476,10 @@ def _native_checkpoint_choices() -> list[str]:
                 metadata = handle.metadata() or {}
         except (OSError, SafetensorError):
             continue
-        if metadata.get("comfyui_model_family") == "sensenova_u1":
+        if (
+            metadata.get("comfyui_model_family") == "sensenova_u1"
+            and metadata.get(ASSETS_FORMAT_KEY) == ASSETS_FORMAT
+        ):
             choices.append(name)
     return choices or ["<未找到 SenseNova checkpoint>"]
 

@@ -3,7 +3,7 @@
 
 The model architecture is always created through this plugin's private patched
 Transformers 4.57.1.  Inputs may be a Hugging Face repo id, a local HF snapshot,
-or a converted ``.safetensors`` checkpoint with its assets directory.
+or a converted single-file ``.safetensors`` checkpoint with embedded assets.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import gc
 import json
 import os
 import re
-import shutil
 import struct
 import sys
 import tempfile
@@ -25,13 +24,19 @@ from typing import BinaryIO
 import torch
 from safetensors import safe_open
 
+from checkpoint_assets import (
+    ASSETS_FORMAT,
+    ASSETS_FORMAT_KEY,
+    build_assets_metadata,
+    materialize_checkpoint_assets,
+)
+
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 COMFY_ROOT = PLUGIN_ROOT.parent.parent
 PLUGIN_SRC = PLUGIN_ROOT / "src"
 PINNED_TRANSFORMERS = "4.57.1+SenseNova-patch"
 PIXEL_VAE_KEY = "vae.pixel_space_vae"
-WEIGHT_SUFFIXES = {".safetensors", ".bin", ".pt", ".pth", ".ckpt"}
 QUANT_METHODS = ("int8_convrot", "mxfp8", "w4a8_convrot", "mxfp4")
 
 
@@ -90,27 +95,7 @@ def source_files(directory: Path) -> tuple[Path, ...]:
     return files
 
 
-def checkpoint_assets(checkpoint: Path, metadata: dict[str, str], override: Path | None) -> Path:
-    if override is not None:
-        assets = override
-    elif (checkpoint.parent / f"{checkpoint.stem}_assets" / "config.json").is_file():
-        assets = checkpoint.parent / f"{checkpoint.stem}_assets"
-    elif metadata.get("sensenova_assets_dir"):
-        name = Path(metadata["sensenova_assets_dir"])
-        if name.is_absolute() or len(name.parts) != 1:
-            raise ValueError(f"Invalid sensenova_assets_dir: {name}")
-        assets = checkpoint.parent / name
-    elif (checkpoint.parent / "config.json").is_file():
-        assets = checkpoint.parent
-    else:
-        raise FileNotFoundError("Checkpoint assets not found; pass --assets with a tokenizer/config directory")
-    assets = assets.expanduser().resolve()
-    if not (assets / "config.json").is_file():
-        raise FileNotFoundError(f"Missing config.json in assets directory: {assets}")
-    return assets
-
-
-def resolve_source(value: str, revision: str, token: str, assets: Path | None) -> ResolvedSource:
+def resolve_source(value: str, revision: str, token: str) -> ResolvedSource:
     candidate = Path(value).expanduser()
     if candidate.exists():
         candidate = candidate.resolve()
@@ -122,7 +107,7 @@ def resolve_source(value: str, revision: str, token: str, assets: Path | None) -
         metadata = dict(header.get("__metadata__", {}))
         return ResolvedSource(
             (candidate,),
-            checkpoint_assets(candidate, metadata, assets),
+            materialize_checkpoint_assets(candidate, metadata, COMFY_ROOT / "temp"),
             str(candidate),
             metadata,
         )
@@ -430,36 +415,14 @@ def write_checkpoint(output: Path, tensors: list[OutputTensor], metadata: dict[s
         raise
 
 
-def copy_assets(source: Path, output: Path) -> Path:
-    destination = output.with_name(f"{output.stem}_assets")
-    destination.mkdir(parents=True)
-    for path in source.iterdir():
-        if not path.is_file() or path.suffix.lower() in WEIGHT_SUFFIXES:
-            continue
-        if path.name.endswith(".safetensors.index.json"):
-            continue
-        shutil.copy2(path, destination / path.name)
-    if not (destination / "config.json").is_file():
-        raise FileNotFoundError(f"Missing config.json in {source}")
-    link = destination / "model.safetensors"
-    relative = os.path.relpath(output, destination)
-    try:
-        link.symlink_to(relative)
-    except OSError:
-        try:
-            os.link(output, link)
-        except OSError:
-            shutil.copy2(output, link)
-            print("Warning: link unavailable; assets contain a full checkpoint copy", file=sys.stderr)
-    return destination
-
-
 def validate_checkpoint(path: Path, expected_method: str, expected_layers: int) -> None:
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = handle.metadata() or {}
         keys = set(handle.keys())
     if metadata.get("sensenova_quantization") != expected_method:
         raise ValueError("Output quantization metadata is invalid")
+    if metadata.get(ASSETS_FORMAT_KEY) != ASSETS_FORMAT:
+        raise ValueError("Output does not contain valid embedded checkpoint assets metadata")
     found = sum(key.endswith(".comfy_quant") for key in keys)
     if found != expected_layers:
         raise ValueError(f"Expected {expected_layers} quantized layers, found {found}")
@@ -472,7 +435,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--method", choices=QUANT_METHODS, required=True)
     parser.add_argument("--revision", default="", help="Hugging Face revision")
     parser.add_argument("--token", default="", help="Hugging Face access token")
-    parser.add_argument("--assets", type=Path, help="Config/tokenizer directory for a standalone checkpoint")
     parser.add_argument("--device", default="cuda", help="Quantization device, normally cuda or cuda:N")
     parser.add_argument("--include", help="Only quantize Linear module names matching this regex")
     parser.add_argument("--exclude", action="append", default=[], help="Keep matching Linear modules in source precision; repeatable")
@@ -486,12 +448,11 @@ def main() -> int:
     output = args.output.expanduser().resolve()
     if output.suffix.lower() not in {".safetensors", ".sft"}:
         raise ValueError("Output filename must end in .safetensors or .sft")
-    assets_output = output.with_name(f"{output.stem}_assets")
-    if (output.exists() or assets_output.exists()) and not args.overwrite:
-        raise FileExistsError("Output or assets directory exists; pass --overwrite to replace it")
+    if output.exists() and not args.overwrite:
+        raise FileExistsError("Output exists; pass --overwrite to replace it")
 
-    source = resolve_source(args.source, args.revision, args.token, args.assets)
-    if output in source.files or assets_output == source.assets:
+    source = resolve_source(args.source, args.revision, args.token)
+    if output in source.files:
         raise ValueError("In-place quantization is not supported; choose a different output name")
     tensors, source_metadata = collect_source_tensors(source.files)
     linear_names, model_keys, transformers_version = private_model_layout(source.assets)
@@ -533,8 +494,7 @@ def main() -> int:
             **source_metadata,
             "format": "pt",
             "comfyui_model_family": "sensenova_u1",
-            "sensenova_checkpoint_version": "2",
-            "sensenova_assets_dir": assets_output.name,
+            "sensenova_checkpoint_version": "3",
             "sensenova_transformers": PINNED_TRANSFORMERS,
             "sensenova_source": source.label,
             "sensenova_pixel_space_vae": "true",
@@ -544,17 +504,15 @@ def main() -> int:
                 {"format_version": "1.0", "layers": layer_configs},
                 separators=(",", ":"),
             ),
+            **build_assets_metadata(source.assets),
         }
         write_checkpoint(output, outputs, metadata)
-        if assets_output.exists():
-            shutil.rmtree(assets_output)
-        assets = copy_assets(source.assets, output)
         validate_checkpoint(output, args.method, len(layer_configs))
     finally:
         spool_path.unlink(missing_ok=True)
 
     print(f"checkpoint: {output}")
-    print(f"assets:     {assets}")
+    print("assets:     embedded in checkpoint")
     print(f"quantized Linear layers: {len(layer_configs)} ({args.method})")
     return 0
 

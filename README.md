@@ -38,9 +38,11 @@ python tools/convert_hf_to_comfy_checkpoint.py \
   ComfyUI/models/checkpoints/SenseNova-U1.safetensors
 ```
 
-转换器按 safetensors 字节区间流式合并 HF 分片，不把完整模型读入内存。输出包括单一权重文件及同名 `_assets` 目录；后者保存 tokenizer/config，并以链接引用权重文件。checkpoint 内加入 `vae.pixel_space_vae` 哨兵。移动或发布模型时必须同时保留 `_assets` 目录，因为 safetensors 不能替代 tokenizer、配置和插件运行代码。
+转换器按 safetensors 字节区间流式合并 HF 分片，不把完整模型读入内存。输出是单一 safetensors 文件：checkpoint 内除 `vae.pixel_space_vae` 哨兵外，还以压缩归档 metadata 保存 tokenizer/config。首次加载时，Loader 会校验归档 SHA256，将这些小文件解压到 `ComfyUI/temp/<checkpoint文件名>_assets/`，并创建名为 `model.safetensors` 的相对符号链接；Windows 无符号链接权限时自动尝试同卷硬链接，二者均不可用时明确报错而不会复制整份权重。缓存与 checkpoint 身份不符时会自动重建，也可以随时删除并在下次加载时重新生成。
 
-转换器本身只做 BF16 无损重排。需要预量化 checkpoint 时，使用 `tools/quantize_checkpoint.py`，支持 `int8_convrot`、`mxfp8`、`w4a8_convrot` 和 `mxfp4`。脚本可读取 Hugging Face 仓库 ID、本地 HF 快照或已有的 safetensors checkpoint，只选择由私有模型结构确认的 `torch.nn.Linear` 权重；Embedding、Norm、卷积、bias 与其他张量保持原精度。输出仍是单一 checkpoint 加同名 `_assets`，Loader 会识别量化元数据并继续通过插件私有 Transformers 4.57.1 构造模型。
+旧版同名 `_assets` 目录不再读取；旧 checkpoint 需要用当前转换器重新生成。移动或发布时只需携带新的 safetensors 文件。
+
+转换器本身只做 BF16 无损重排。需要预量化 checkpoint 时，使用 `tools/quantize_checkpoint.py`，支持 `int8_convrot`、`mxfp8`、`w4a8_convrot` 和 `mxfp4`。脚本可读取 Hugging Face 仓库 ID、本地 HF 快照或当前格式的单文件 safetensors checkpoint，只选择由私有模型结构确认的 `torch.nn.Linear` 权重；Embedding、Norm、卷积、bias 与其他张量保持原精度。量化输出同样内嵌压缩 assets，Loader 会识别量化元数据并继续通过插件私有 Transformers 4.57.1 构造模型。
 
 ```bash
 ComfyUI/venv/bin/python tools/quantize_checkpoint.py \

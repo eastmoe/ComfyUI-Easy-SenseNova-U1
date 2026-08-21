@@ -8,16 +8,20 @@ python tools/convert_hf_to_comfy_checkpoint.py \
   /path/to/ComfyUI/models/checkpoints/SenseNova-U1.safetensors
 ```
 
-The result is `SenseNova-U1.safetensors` plus `SenseNova-U1_assets/`. The
-checkpoint contains the original weights and `vae.pixel_space_vae`, the same
-pixel-space VAE sentinel used by native ComfyUI pixel diffusion checkpoints.
-The assets directory contains the local tokenizer/config and links back to the
-checkpoint so the plugin's private patched Transformers 4.57.1 loader can load
-the weights without converting the model implementation.
+The result is one `SenseNova-U1.safetensors` file. It contains the original
+weights, the `vae.pixel_space_vae` sentinel used by native ComfyUI pixel
+diffusion checkpoints, and a compressed tokenizer/config archive in
+safetensors metadata. The converter preserves BF16 weights and does not
+quantize them.
 
-Keep both entries together. The safetensors file is the only weight payload;
-tokenizer/config and the plugin's patched runtime are intentionally not encoded
-as tensors. This converter preserves BF16 weights and does not quantize them.
+On first load, the plugin verifies the embedded archive and extracts it to
+`ComfyUI/temp/SenseNova-U1_assets/`. It then creates a relative symbolic link
+named `model.safetensors` pointing to the checkpoint. If symbolic links are not
+permitted on Windows, it uses a same-volume hard link. The cache is rebuilt
+when the checkpoint identity changes and can be deleted safely between loads.
+If neither link type is available, loading fails instead of copying the full
+weight file. Legacy sibling `_assets` directories are not supported; reconvert
+old checkpoints with the current converter.
 
 ## Linear-only quantization
 
@@ -47,6 +51,7 @@ The first three formats use the ComfyUI/comfy-kitchen quantization ABI. MXFP4
 uses TorchAO and requires a PyTorch-compatible `torchao>=0.16`. Quantization is
 streamed one source tensor at a time, but it still needs enough accelerator
 memory for the largest individual Linear weight and temporary disk space for
-the quantized payload. The output includes a sibling `_assets` directory and is
-loaded by the same SenseNova Loader, which continues to construct the model via
-the plugin's private patched Transformers 4.57.1.
+the quantized payload. The output embeds the same compressed assets in its
+single checkpoint file and is loaded by the same SenseNova Loader, which
+continues to construct the model via the plugin's private patched Transformers
+4.57.1.

@@ -27,6 +27,8 @@ import comfy.sd
 import comfy.supported_models_base
 
 from .runtime import SenseNovaHandle, comfy_to_pil_batch
+from .checkpoint_assets import materialize_checkpoint_assets
+from .paths import comfy_root
 
 
 IMG_START_TOKEN = "<img>"
@@ -574,12 +576,8 @@ def make_dual_guider(model, positive, middle, negative, text_cfg: float, image_c
 
 
 def checkpoint_assets_path(checkpoint: Path, metadata: dict[str, str] | None = None) -> Path:
-    name = (metadata or {}).get("sensenova_assets_dir") or f"{checkpoint.stem}_assets"
-    if Path(name).is_absolute() or len(Path(name).parts) != 1:
-        raise ValueError(f"Invalid sensenova_assets_dir metadata: {name!r}")
-    assets = checkpoint.parent / name
-    if not (assets / "config.json").is_file():
-        raise FileNotFoundError(
-            f"SenseNova checkpoint assets not found: {assets}. Keep the *_assets directory beside the checkpoint."
-        )
-    return assets
+    return materialize_checkpoint_assets(
+        checkpoint,
+        metadata or {},
+        comfy_root() / "temp",
+    )
