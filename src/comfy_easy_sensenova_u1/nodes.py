@@ -46,6 +46,7 @@ from .comfy_native import (
     checkpoint_assets_path,
     conditioning_from_prompt,
     make_dual_guider,
+    make_guider,
     make_model_patcher,
     make_pixel_vae,
     patch_sampling,
@@ -633,7 +634,10 @@ class ComfyEasySenseNovaDualGuider:
                 "negative": ("CONDITIONING",),
                 "text_cfg": ("FLOAT", ui("文本 CFG", "正面条件相对仅图像条件的引导。", default=4.0, min=0.0, max=100.0, step=0.1)),
                 "image_cfg": ("FLOAT", ui("图像 CFG", "仅图像条件相对无条件的引导。", default=1.0, min=0.0, max=100.0, step=0.1)),
-            }
+            },
+            "optional": {
+                "thinking_noise": ("NOISE", ui("思考随机源", "连接 RandomNoise；可与采样器共用同一路 NOISE，也可使用独立随机种子。")),
+            },
         }
 
     RETURN_TYPES = ("GUIDER",)
@@ -641,10 +645,34 @@ class ComfyEasySenseNovaDualGuider:
     CATEGORY = NATIVE_CATEGORY
     DESCRIPTION = "复现 SenseNova 编辑的三分支引导公式；连接 SamplerCustomAdvanced。"
 
-    def get_guider(self, model, positive, image_condition, negative, text_cfg, image_cfg):
+    def get_guider(self, model, positive, image_condition, negative, text_cfg, image_cfg, thinking_noise=None):
         if model.model_options.get("sensenova_guidance", {}).get("cfg_norm") == "cfg_zero_star":
             raise ValueError("cfg_zero_star 是文生图引导；图像编辑请在 Sampling Patch 选择 none、global 或 channel。")
-        return (make_dual_guider(model, positive, image_condition, negative, text_cfg, image_cfg),)
+        return (make_dual_guider(model, positive, image_condition, negative, text_cfg, image_cfg, thinking_noise),)
+
+
+class ComfyEasySenseNovaGuider:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "positive": ("CONDITIONING",),
+                "negative": ("CONDITIONING",),
+                "cfg": ("FLOAT", ui("CFG", "文本条件引导强度。", default=4.0, min=0.0, max=100.0, step=0.1)),
+            },
+            "optional": {
+                "thinking_noise": ("NOISE", ui("思考随机源", "连接 RandomNoise；可与采样器共用同一路 NOISE，也可使用独立随机种子。")),
+            },
+        }
+
+    RETURN_TYPES = ("GUIDER",)
+    FUNCTION = "get_guider"
+    CATEGORY = NATIVE_CATEGORY
+    DESCRIPTION = "文生图引导器；可从指定 NOISE 读取思考 seed，未连接时继承采样器 seed。"
+
+    def get_guider(self, model, positive, negative, cfg, thinking_noise=None):
+        return (make_guider(model, positive, negative, cfg, thinking_noise),)
 
 
 class ComfyEasySenseNovaThinkText:
@@ -678,6 +706,7 @@ NODE_CLASS_MAPPINGS = {
     "ComfyEasySenseNovaConditioning": ComfyEasySenseNovaConditioning,
     "ComfyEasySenseNovaSamplingPatch": ComfyEasySenseNovaSamplingPatch,
     "ComfyEasySenseNovaScheduler": ComfyEasySenseNovaScheduler,
+    "ComfyEasySenseNovaGuider": ComfyEasySenseNovaGuider,
     "ComfyEasySenseNovaDualGuider": ComfyEasySenseNovaDualGuider,
     "ComfyEasySenseNovaThinkText": ComfyEasySenseNovaThinkText,
 }
@@ -693,6 +722,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ComfyEasySenseNovaConditioning": "SenseNova Conditioning",
     "ComfyEasySenseNovaSamplingPatch": "SenseNova Sampling Patch",
     "ComfyEasySenseNovaScheduler": "SenseNova Scheduler",
+    "ComfyEasySenseNovaGuider": "SenseNova Guider",
     "ComfyEasySenseNovaDualGuider": "SenseNova Dual Guider",
     "ComfyEasySenseNovaThinkText": "SenseNova Think Text",
 }

@@ -35,6 +35,7 @@ from .progress import ThinkingInferenceProgress
 IMG_START_TOKEN = "<img>"
 IMG_END_TOKEN = "</img>"
 IMG_CONTEXT_TOKEN = "<IMG_CONTEXT>"
+THINK_TEMPERATURE = 0.7
 
 
 class SenseNovaModelConfig(comfy.supported_models_base.BASE):
@@ -73,6 +74,7 @@ class SenseNovaConditionBundle:
     think_text: str = ""
     prepared: dict[str, PreparedBranch] = field(default_factory=dict)
     prepared_shape: tuple[int, int, int] | None = None
+    prepared_seed: int | None = None
     lock: threading.RLock = field(default_factory=threading.RLock)
 
     def clear(self) -> None:
@@ -83,12 +85,14 @@ class SenseNovaConditionBundle:
                 clear_flash_kv_cache(branch.cache)
         self.prepared.clear()
         self.prepared_shape = None
+        self.prepared_seed = None
 
 
 @dataclass(frozen=True)
 class SenseNovaBranchSpec:
     bundle: SenseNovaConditionBundle
     branch: str
+    seed: int | None = None
 
 
 def conditioning_from_prompt(
@@ -118,6 +122,18 @@ def conditioning_from_prompt(
     return positive, middle, negative, bundle
 
 
+def conditioning_with_seed(conditioning: list, seed: int) -> list:
+    seeded = []
+    for tensor, metadata in conditioning:
+        spec = metadata.get("sensenova_spec")
+        if not isinstance(spec, SenseNovaBranchSpec):
+            raise TypeError("SenseNova Guider requires conditioning from SenseNova Conditioning.")
+        metadata = metadata.copy()
+        metadata["sensenova_spec"] = SenseNovaBranchSpec(spec.bundle, spec.branch, seed)
+        seeded.append([tensor, metadata])
+    return seeded
+
+
 def _expand_cache(cache, batch_size: int) -> None:
     if cache is None:
         return
@@ -126,7 +142,67 @@ def _expand_cache(cache, batch_size: int) -> None:
         layer.values = layer.values.expand(batch_size, *layer.values.shape[1:])
 
 
-def _prepare_text_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaConditionBundle, width: int, height: int, batch: int) -> None:
+def _sample_think_token(logits: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    probabilities = torch.softmax(logits.float() / THINK_TEMPERATURE, dim=-1)
+    return torch.multinomial(probabilities, 1, generator=generator).squeeze(-1)
+
+
+def _generate_seeded_think(
+    model,
+    tokenizer,
+    prefix_outputs,
+    past_key_values,
+    t_idx: int,
+    max_think_tokens: int,
+    seed: int,
+):
+    from sensenova_u1.models.neo_unify.conversation import get_conv_template
+
+    template = get_conv_template(model.template)
+    eos_token_id = tokenizer.convert_tokens_to_ids(template.sep.strip())
+    think_end_token_id = tokenizer.convert_tokens_to_ids("</think>")
+    think_token_ids = []
+    generator = torch.Generator(device=prefix_outputs.logits.device).manual_seed(seed)
+    next_token = _sample_think_token(prefix_outputs.logits[:, -1, :], generator)
+
+    for _ in range(max_think_tokens):
+        token_item = next_token.item()
+        if token_item == eos_token_id:
+            break
+        if token_item == think_end_token_id:
+            model.language_model.model.current_index = t_idx
+            outputs = model.language_model(
+                input_ids=next_token.unsqueeze(0),
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+            past_key_values = outputs.past_key_values
+            t_idx += 1
+            think_token_ids.append(token_item)
+            break
+
+        think_token_ids.append(token_item)
+        model.language_model.model.current_index = t_idx
+        outputs = model.language_model(
+            input_ids=next_token.unsqueeze(0),
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+        past_key_values = outputs.past_key_values
+        t_idx += 1
+        next_token = _sample_think_token(outputs.logits[:, -1, :], generator)
+
+    append_ids = tokenizer(
+        "\n\n" + IMG_START_TOKEN,
+        return_tensors="pt",
+        add_special_tokens=False,
+    )["input_ids"].to(model.device)
+    t_idx = model._append_text_tokens_to_cache(past_key_values, t_idx, append_ids)
+    think_text = tokenizer.decode(think_token_ids, skip_special_tokens=False)
+    return past_key_values, t_idx, think_text
+
+
+def _prepare_text_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaConditionBundle, width: int, height: int, batch: int, seed: int) -> None:
     model = wrapper.diffusion_model
     tokenizer = wrapper.tokenizer
     from sensenova_u1.models.neo_unify.modeling_neo_chat import prepare_flash_kv_cache
@@ -158,13 +234,14 @@ def _prepare_text_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaCondit
             "SenseNova Native 文生图思考",
             "token",
         ):
-            positive_cache, t_index, bundle.think_text = model._generate_think(
+            positive_cache, t_index, bundle.think_text = _generate_seeded_think(
+                model,
                 tokenizer,
                 outputs,
                 positive_cache,
                 t_index,
-                IMG_START_TOKEN,
-                max_think_tokens=bundle.max_think_tokens,
+                bundle.max_think_tokens,
+                seed,
             )
         positive_indexes = model._build_t2i_image_indexes(token_h, token_w, t_index + 1, device=ids.device)
     else:
@@ -184,7 +261,7 @@ def _prepare_text_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaCondit
     }
 
 
-def _prepare_edit_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaConditionBundle, width: int, height: int, batch: int) -> None:
+def _prepare_edit_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaConditionBundle, width: int, height: int, batch: int, seed: int) -> None:
     model = wrapper.diffusion_model
     tokenizer = wrapper.tokenizer
     from sensenova_u1.models.neo_unify.modeling_neo_chat import prepare_flash_kv_cache
@@ -257,13 +334,14 @@ def _prepare_edit_bundle(wrapper: "SenseNovaComfyModel", bundle: SenseNovaCondit
                 "SenseNova Native 图像编辑思考",
                 "token",
             ):
-                cache, t_index, bundle.think_text = model._generate_think(
+                cache, t_index, bundle.think_text = _generate_seeded_think(
+                    model,
                     tokenizer,
                     outputs,
                     cache,
                     t_index,
-                    IMG_START_TOKEN,
-                    max_think_tokens=bundle.max_think_tokens,
+                    bundle.max_think_tokens,
+                    seed,
                 )
             image_indexes = model._build_t2i_image_indexes(
                 token_h, token_w, t_index + 1, device=embeds.device
@@ -319,7 +397,9 @@ class SenseNovaComfyModel(comfy.model_base.BaseModel):
         spec = kwargs.get("sensenova_spec")
         if not isinstance(spec, SenseNovaBranchSpec):
             raise ValueError("SenseNova MODEL requires conditioning from SenseNova Conditioning.")
-        return {"sensenova_condition": SenseNovaCondition(spec)}
+        seed = spec.seed if spec.seed is not None else int(kwargs.get("seed") or 0)
+        seeded_spec = SenseNovaBranchSpec(spec.bundle, spec.branch, seed)
+        return {"sensenova_condition": SenseNovaCondition(seeded_spec)}
 
     def _apply_model(
         self,
@@ -335,16 +415,18 @@ class SenseNovaComfyModel(comfy.model_base.BaseModel):
         if not isinstance(sensenova_condition, SenseNovaBranchSpec):
             raise TypeError("Missing SenseNova branch condition")
         bundle = sensenova_condition.bundle
+        seed = sensenova_condition.seed
         batch, _, height, width = x.shape
         shape = (batch, width, height)
         with bundle.lock:
-            if bundle.prepared_shape != shape:
+            if bundle.prepared_shape != shape or bundle.prepared_seed != seed:
                 bundle.clear()
                 if bundle.images:
-                    _prepare_edit_bundle(self, bundle, width, height, batch)
+                    _prepare_edit_bundle(self, bundle, width, height, batch, seed)
                 else:
-                    _prepare_text_bundle(self, bundle, width, height, batch)
+                    _prepare_text_bundle(self, bundle, width, height, batch, seed)
                 bundle.prepared_shape = shape
+                bundle.prepared_seed = seed
                 self._active_bundles[id(bundle)] = bundle
         branch = bundle.prepared[sensenova_condition.branch]
         model = self.diffusion_model
@@ -582,7 +664,23 @@ class SenseNovaDualGuider(comfy.samplers.CFGGuider):
         return guided
 
 
-def make_dual_guider(model, positive, middle, negative, text_cfg: float, image_cfg: float):
+def make_guider(model, positive, negative, cfg: float, thinking_noise=None):
+    if thinking_noise is not None:
+        seed = int(thinking_noise.seed)
+        positive = conditioning_with_seed(positive, seed)
+        negative = conditioning_with_seed(negative, seed)
+    guider = comfy.samplers.CFGGuider(model)
+    guider.set_conds(positive, negative)
+    guider.set_cfg(cfg)
+    return guider
+
+
+def make_dual_guider(model, positive, middle, negative, text_cfg: float, image_cfg: float, thinking_noise=None):
+    if thinking_noise is not None:
+        seed = int(thinking_noise.seed)
+        positive = conditioning_with_seed(positive, seed)
+        middle = conditioning_with_seed(middle, seed)
+        negative = conditioning_with_seed(negative, seed)
     guider = SenseNovaDualGuider(model)
     guider.set_sensenova_conds(positive, middle, negative, text_cfg, image_cfg)
     return guider

@@ -33,6 +33,7 @@ git clone https://github.com/eastmoe/ComfyUI-Easy-SenseNova-U1
 | SenseNova Conditioning | 输出正面、仅图像、无条件三路 `CONDITIONING`。图片可选输入，Think Mode 在首次前向时建立原生 DynamicCache，宽高和批量从实际 latent 推导 |
 | SenseNova Sampling Patch | 设置原生 flow timestep shift、动态分辨率 noise scale、CFG 区间与 patch-space CFG 归一化 |
 | SenseNova Scheduler | 输出与原项目完全相同的时间步，推荐接 Euler |
+| SenseNova Guider | 文生图引导器。思考随机源可连接与采样器相同或不同的 `RandomNoise`；不连接时自动继承采样器 seed |
 | SenseNova Dual Guider | 图像编辑用，复现原项目的编辑 CFG 结构，接 `SamplerCustomAdvanced` |
 | SenseNova Think Text | 采样完成后读取 Think Mode 的思考文本 |
 
@@ -89,6 +90,17 @@ python tools/quantize_checkpoint.py \
 3. 加载节点的 `MODEL` / `VAE` 输出接文生图节点，或接类原生节点自由组合
 
 官方模型体积较大，下载和首次加载需要一些时间。SenseNova-U1 推荐约 2K 输出，峰值显存还受分辨率、KV Cache、批量数和交错图像数影响。
+
+## 示例工作流
+
+`workflows/` 下有两个示例：
+
+- `Sensenova 图像生成.json`：文生图，Loader → LoRA → Sampling Patch → Conditioning → CFGGuider → SamplerCustomAdvanced 的完整组合
+- `Sensenova 图像编辑.json`：图像编辑，用 DualGuider 做编辑引导，参考图从 LoadImage 进入
+
+打开方式：把 json 拖进 ComfyUI 画布，或 Workflow → Open 选文件。
+
+两个工作流引用了示例环境的模型文件，打开后按自己机器重新选择 CheckPoint 和加速 Lora；图像编辑工作流需要给 LoadImage 上传一张参考图。
 
 ## 原项目
 
